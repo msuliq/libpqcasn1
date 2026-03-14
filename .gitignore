@@ -1,0 +1,16 @@
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.lib
+*.exe
+*.dSYM/
+build/
+dist/
+compile_commands.json
+CMakeUserPresets.json
+test/test_pqc_asn1
+.DS_Store
+.claude
+.tool-versions

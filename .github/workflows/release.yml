@@ -1,0 +1,119 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test
+        run: make test
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify VERSION file matches tag
+        run: |
+          file_version=$(cat VERSION | tr -d '[:space:]')
+          tag_version=${{ steps.version.outputs.version }}
+          if [ "$file_version" != "$tag_version" ]; then
+            echo "ERROR: VERSION file ($file_version) does not match tag ($tag_version)"
+            exit 1
+          fi
+
+      - name: Create source tarball
+        run: |
+          prefix="libpqcasn1-${{ steps.version.outputs.version }}"
+          mkdir -p dist
+
+          # Create tarball with clean source tree
+          tar czf "dist/${prefix}.tar.gz" \
+            --transform="s,^,${prefix}/," \
+            include/pqc_asn1.h \
+            src/pqc_asn1.c \
+            test/test_pqc_asn1.c \
+            CMakeLists.txt \
+            Makefile \
+            pqc_asn1.pc.in \
+            VERSION \
+            LICENSE-MIT \
+            LICENSE-APACHE
+
+          # Create checksum
+          cd dist
+          sha256sum "${prefix}.tar.gz" > "${prefix}.tar.gz.sha256"
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          version=${{ steps.version.outputs.version }}
+          cat > release_notes.md << 'NOTES'
+          ## libpqcasn1 v${{ steps.version.outputs.version }}
+
+          Standalone C library for DER/PEM/Base64 encoding/decoding of post-quantum cryptographic keys (SPKI / PKCS#8).
+
+          ### Source tarball
+
+          The tarball contains everything needed to build and link `libpqcasn1`:
+
+          | File | Description |
+          |------|-------------|
+          | `include/pqc_asn1.h` | Public header |
+          | `src/pqc_asn1.c` | Implementation |
+          | `CMakeLists.txt` | CMake build system |
+          | `Makefile` | Simple Makefile alternative |
+          | `VERSION` | Version string |
+          | `LICENSE-MIT` | MIT license |
+          | `LICENSE-APACHE` | Apache 2.0 license |
+
+          ### Usage
+
+          **Build with CMake:**
+          ```sh
+          tar xzf libpqcasn1-${{ steps.version.outputs.version }}.tar.gz
+          cd libpqcasn1-${{ steps.version.outputs.version }}
+          cmake -B build
+          cmake --build build
+          ```
+
+          **Build with Make:**
+          ```sh
+          make
+          ```
+
+          **Embed in your project** (Ruby, Python, Rust, etc.):
+          Just copy `include/pqc_asn1.h` and `src/pqc_asn1.c` into your project and compile them alongside your code.
+
+          **Custom allocator** (e.g. for Ruby):
+          ```c
+          #define PQC_ASN1_MALLOC ruby_xmalloc
+          #define PQC_ASN1_FREE   ruby_xfree
+          #include "pqc_asn1.h"
+          ```
+          NOTES
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release_notes.md
+          files: |
+            dist/libpqcasn1-${{ steps.version.outputs.version }}.tar.gz
+            dist/libpqcasn1-${{ steps.version.outputs.version }}.tar.gz.sha256
