@@ -1,6 +1,7 @@
 /*
  * pqc_asn1.h — DER/PEM/Base64 utilities for post-quantum key serialization.
  *
+ *
  * Standalone C library — no external dependencies beyond the C standard library.
  *
  * This module is intentionally algorithm-agnostic: the same DER/PEM
@@ -36,9 +37,9 @@ extern "C" {
 
 #define PQC_ASN1_VERSION_MAJOR 0
 #define PQC_ASN1_VERSION_MINOR 1
-#define PQC_ASN1_VERSION_PATCH 0
+#define PQC_ASN1_VERSION_PATCH 1
 
-#define PQC_ASN1_VERSION_STRING "0.1.0"
+#define PQC_ASN1_VERSION_STRING "0.1.1"
 
 /* Runtime version query (returns PQC_ASN1_VERSION_STRING). */
 const char *pqc_asn1_version(void);
@@ -187,16 +188,37 @@ pqc_asn1_status_t pqc_asn1_der_read_tlv(
 /* Compute SPKI DER total size.
  * Returns PQC_ASN1_OK on success, PQC_ASN1_ERR_INVALID_OID or
  * PQC_ASN1_ERR_OVERFLOW on failure. */
-pqc_asn1_status_t pqc_asn1_spki_der_size(const uint8_t *oid_der, size_t oid_der_len,
-                                            size_t pk_len, size_t *out_size);
+pqc_asn1_status_t pqc_asn1_spki_size(const uint8_t *oid_der, size_t oid_der_len,
+                                       size_t pk_len, size_t *out_size);
+
+/* Compute SPKI DER total size with optional AlgorithmIdentifier parameters.
+ * params/params_len: raw DER bytes appended after the OID inside AlgorithmIdentifier
+ *   (pass NULL/0 for OID-only AlgorithmIdentifier, equivalent to pqc_asn1_spki_size).
+ * Returns PQC_ASN1_OK on success, or a negative error code. */
+pqc_asn1_status_t pqc_asn1_spki_size_ex(
+    const uint8_t *oid_der, size_t oid_der_len,
+    const uint8_t *params, size_t params_len,
+    size_t pk_len, size_t *out_size);
 
 /* Write SPKI DER into a caller-provided buffer.
- * buf_len must be >= pqc_asn1_spki_der_size().
+ * buf_len must be >= pqc_asn1_spki_size().
  * On success, *out_written is set to the total bytes written.
  * Returns PQC_ASN1_OK on success, or a negative error code. */
-pqc_asn1_status_t pqc_asn1_build_pk_spki_der_write(
+pqc_asn1_status_t pqc_asn1_spki_build_write(
     uint8_t *buf, size_t buf_len,
     const uint8_t *oid_der, size_t oid_der_len,
+    const uint8_t *pk_bytes, size_t pk_len,
+    size_t *out_written);
+
+/* Write SPKI DER with optional AlgorithmIdentifier parameters.
+ * params/params_len: raw DER bytes appended after the OID (NULL/0 if absent).
+ * buf_len must be >= pqc_asn1_spki_size_ex().
+ * On success, *out_written is set to the total bytes written.
+ * Returns PQC_ASN1_OK on success, or a negative error code. */
+pqc_asn1_status_t pqc_asn1_spki_build_write_ex(
+    uint8_t *buf, size_t buf_len,
+    const uint8_t *oid_der, size_t oid_der_len,
+    const uint8_t *params, size_t params_len,
     const uint8_t *pk_bytes, size_t pk_len,
     size_t *out_written);
 
@@ -211,7 +233,7 @@ pqc_asn1_status_t pqc_asn1_build_pk_spki_der_write(
  *     BIT STRING { 0x00, key_bytes }
  *   }
  */
-pqc_asn1_status_t pqc_asn1_build_pk_spki_der(
+pqc_asn1_status_t pqc_asn1_spki_build(
     const uint8_t *oid_der, size_t oid_der_len,
     const uint8_t *pk_bytes, size_t pk_len,
     uint8_t **out_buf, size_t *out_total);
@@ -219,17 +241,41 @@ pqc_asn1_status_t pqc_asn1_build_pk_spki_der(
 /* Compute PKCS#8 DER total size.
  * Returns PQC_ASN1_OK on success, PQC_ASN1_ERR_INVALID_OID or
  * PQC_ASN1_ERR_OVERFLOW on failure. */
-pqc_asn1_status_t pqc_asn1_pkcs8_der_size(const uint8_t *oid_der, size_t oid_der_len,
-                                             size_t sk_len, size_t *out_size);
+pqc_asn1_status_t pqc_asn1_pkcs8_size(const uint8_t *oid_der, size_t oid_der_len,
+                                        size_t sk_len, size_t *out_size);
+
+/* Compute PKCS#8 DER total size with optional parameters and publicKey field.
+ * params/params_len: AlgorithmIdentifier parameter bytes (NULL/0 if absent).
+ * pub_len: size of optional OneAsymmetricKey publicKey [1] field (0 if absent).
+ * Returns PQC_ASN1_OK on success, or a negative error code. */
+pqc_asn1_status_t pqc_asn1_pkcs8_size_ex(
+    const uint8_t *oid_der, size_t oid_der_len,
+    const uint8_t *params, size_t params_len,
+    size_t sk_len, size_t pub_len, size_t *out_size);
 
 /* Write PKCS#8 DER into a caller-provided buffer.
- * buf_len must be >= pqc_asn1_pkcs8_der_size().
+ * buf_len must be >= pqc_asn1_pkcs8_size().
  * On success, *out_written is set to the total bytes written.
  * Returns PQC_ASN1_OK on success, or a negative error code. */
-pqc_asn1_status_t pqc_asn1_build_sk_pkcs8_der_write(
+pqc_asn1_status_t pqc_asn1_pkcs8_build_write(
     uint8_t *buf, size_t buf_len,
     const uint8_t *oid_der, size_t oid_der_len,
     const uint8_t *sk_bytes, size_t sk_len,
+    size_t *out_written);
+
+/* Write PKCS#8 DER with optional AlgorithmIdentifier parameters and
+ * OneAsymmetricKey publicKey [1] IMPLICIT field.
+ * params/params_len: AlgorithmIdentifier parameter bytes (NULL/0 if absent).
+ * pub_bytes/pub_len: publicKey [1] IMPLICIT content bytes (NULL/0 if absent).
+ * buf_len must be >= pqc_asn1_pkcs8_size_ex().
+ * Error paths securely zero the buffer (may contain partial secret key material).
+ * Returns PQC_ASN1_OK on success, or a negative error code. */
+pqc_asn1_status_t pqc_asn1_pkcs8_build_write_ex(
+    uint8_t *buf, size_t buf_len,
+    const uint8_t *oid_der, size_t oid_der_len,
+    const uint8_t *params, size_t params_len,
+    const uint8_t *sk_bytes, size_t sk_len,
+    const uint8_t *pub_bytes, size_t pub_len,
     size_t *out_written);
 
 /* Build PKCS#8 OneAsymmetricKey DER (allocating).
@@ -244,7 +290,7 @@ pqc_asn1_status_t pqc_asn1_build_sk_pkcs8_der_write(
  *     OCTET STRING { key_bytes }
  *   }
  */
-pqc_asn1_status_t pqc_asn1_build_sk_pkcs8_der(
+pqc_asn1_status_t pqc_asn1_pkcs8_build(
     const uint8_t *oid_der, size_t oid_der_len,
     const uint8_t *sk_bytes, size_t sk_len,
     uint8_t **out_buf, size_t *out_total);
@@ -255,31 +301,47 @@ pqc_asn1_status_t pqc_asn1_build_sk_pkcs8_der(
 
 /* Parse SPKI / PKCS#8 DER structures.  Output pointers reference into
  * the input buffer (zero-copy, no allocation).  Parsers enforce:
- *   - RFC 9629: AlgorithmIdentifier must contain only the OID (no params)
  *   - No trailing data after the outer SEQUENCE
- *   - No extra fields inside any SEQUENCE
+ *   - No extra fields inside the outer SEQUENCE
  *   - BIT STRING unused-bits byte must be 0x00
- *   - PKCS#8 version must be INTEGER 0 */
+ *   - PKCS#8 version must be INTEGER 0
+ *
+ * AlgorithmIdentifier parameters (if any) are captured and returned via
+ * alg_params/alg_params_len rather than rejected.  Pass NULL/NULL for
+ * either pointer to ignore parameters.  RFC 9629 callers that require
+ * no-params can check (alg_params_len == 0) after parsing.
+ *
+ * PKCS#8: the optional OneAsymmetricKey publicKey [1] field is returned
+ * via pub_key/pub_key_len when present; pass NULL/NULL to ignore it. */
 
 /* Parse SubjectPublicKeyInfo DER.
  * Returns PQC_ASN1_OK on success, or a negative PQC_ASN1_ERR_* code.
  * Output pointers reference into the input buffer (no allocation).
- * oid_der/oid_der_len: the AlgorithmIdentifier content (OID TLV).
- * pk_bytes/pk_len: the public key bytes (after BIT STRING unused-bits). */
-pqc_asn1_status_t pqc_asn1_parse_pk_spki_der(
+ * oid_der/oid_der_len: the OID TLV from within AlgorithmIdentifier.
+ * alg_params/alg_params_len: AlgorithmIdentifier params bytes (0 len if absent).
+ *   Pass NULL/NULL to discard.
+ * pk_bytes/pk_len: public key bytes (after BIT STRING unused-bits byte). */
+pqc_asn1_status_t pqc_asn1_spki_parse(
     const uint8_t *der, size_t der_len,
     const uint8_t **oid_der, size_t *oid_der_len,
+    const uint8_t **alg_params, size_t *alg_params_len,
     const uint8_t **pk_bytes, size_t *pk_len);
 
 /* Parse PKCS#8 OneAsymmetricKey DER.
  * Returns PQC_ASN1_OK on success, or a negative PQC_ASN1_ERR_* code.
  * Output pointers reference into the input buffer (no allocation).
- * oid_der/oid_der_len: the AlgorithmIdentifier content (OID TLV).
- * sk_bytes/sk_len: the secret key bytes (OCTET STRING content). */
-pqc_asn1_status_t pqc_asn1_parse_sk_pkcs8_der(
+ * oid_der/oid_der_len: the OID TLV from within AlgorithmIdentifier.
+ * alg_params/alg_params_len: AlgorithmIdentifier params bytes (0 len if absent).
+ *   Pass NULL/NULL to discard.
+ * sk_bytes/sk_len: secret key bytes (OCTET STRING content).
+ * pub_key/pub_key_len: optional publicKey [1] BIT STRING bytes (0 len if absent).
+ *   Pass NULL/NULL to discard. */
+pqc_asn1_status_t pqc_asn1_pkcs8_parse(
     const uint8_t *der, size_t der_len,
     const uint8_t **oid_der, size_t *oid_der_len,
-    const uint8_t **sk_bytes, size_t *sk_len);
+    const uint8_t **alg_params, size_t *alg_params_len,
+    const uint8_t **sk_bytes, size_t *sk_len,
+    const uint8_t **pub_key, size_t *pub_key_len);
 
 /* ------------------------------------------------------------------ */
 /* Base64 codec                                                        */

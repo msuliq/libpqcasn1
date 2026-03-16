@@ -1,6 +1,19 @@
 /*
  * pqc_asn1.c — DER/PEM/Base64 utilities for post-quantum key serialization.
  *
+ * GENERATED FILE — do not edit directly.
+ * Edit the individual source files in src/ and run scripts/concat.sh to
+ * regenerate this file.
+ *
+ * Source files (in concatenation order):
+ *   src/tlv.c      — version, safe arithmetic, secure zeroing, DER TLV helpers
+ *   src/builder.c  — SPKI/PKCS#8 layout structs and DER builders
+ *   src/parser.c   — SPKI/PKCS#8 DER parsers
+ *   src/base64.c   — RFC 4648 Base64 encode/decode
+ *   src/pem.c      — RFC 7468 PEM encode/decode
+ *
+ * Version: 0.1.0
+ *
  * Standalone C library — no external dependencies beyond the C standard library.
  *
  * Algorithm-agnostic codec for ASN.1/DER/PEM/Base64 encoding.
@@ -11,34 +24,9 @@
  * This module is intentionally algorithm-agnostic: the same DER/PEM
  * primitives apply to ML-DSA, ML-KEM, SLH-DSA, and any future PQC
  * scheme that uses standard SPKI / PKCS#8 / PEM wrapping.
- *
- * Design trade-off: OpenSSL dependency
- * =====================================
- * This file implements a minimal ASN.1/DER/PEM codec from scratch rather
- * than depending on OpenSSL.  The rationale:
- *
- *   1. Post-quantum independence — ML-DSA is meant to survive a future
- *      where classical crypto (and thus most of OpenSSL) is broken.
- *      Coupling the library to OpenSSL at link time would be ironic.
- *
- *   2. Portability — A self-contained codec avoids an external dependency
- *      entirely, making it easy to embed in Ruby, Python, Rust, or any
- *      other language binding.
- *
- *   3. Simplicity — PQC keys use only SEQUENCE, OID, BIT STRING,
- *      OCTET STRING, and INTEGER 0.  The subset needed is a single
- *      C file, far simpler than pulling in libcrypto.
- *
- *   4. Secure zeroing — Secret key DER/PEM intermediates are zeroed in
- *      the same compilation unit, making it easy to audit the wipe path.
- *      With OpenSSL, zeroing would depend on its internal buffer mgmt.
- *
- * The cost is that we must maintain this codec ourselves.  If OpenSSL
- * adds native PQC support (expected in a future release), revisiting
- * this decision would be reasonable.
  */
 
-/* Feature macros — must precede all includes.
+/* Feature-test macros — must precede all system includes.
  * _GNU_SOURCE:             enables memmem() and explicit_bzero() on glibc.
  * __STDC_WANT_LIB_EXT1__: enables memset_s() on Apple/BSD via Annex K. */
 #if defined(__linux__)
@@ -54,24 +42,6 @@
 #include <windows.h>    /* SecureZeroMemory */
 #endif
 
-/* ------------------------------------------------------------------ */
-/* Version                                                             */
-/* ------------------------------------------------------------------ */
-
-const char *pqc_asn1_version(void)
-{
-    return PQC_ASN1_VERSION_STRING;
-}
-
-/* ------------------------------------------------------------------ */
-/* Internal: safe arithmetic                                           */
-/* ------------------------------------------------------------------ */
-
-/* Sentinel value for size overflow detection.  Uses (size_t)-1 (i.e.
- * SIZE_MAX) which is never a valid allocation size.  Kept as a #define
- * because this value exceeds INT_MAX and cannot be represented as an
- * enum constant portably, and static const cannot be used in other
- * static initializers in C11. */
 #define PQC_SIZE_OVERFLOW ((size_t)-1)
 
 /* Overflow-checked addition.  Returns PQC_SIZE_OVERFLOW on wraparound.
@@ -83,6 +53,63 @@ static inline size_t safe_add(size_t a, size_t b)
     if (result < a)
         return PQC_SIZE_OVERFLOW;
     return result;
+}
+
+/* Compute total TLV size for a given content length: 1 (tag) + length field + content.
+ * Returns PQC_SIZE_OVERFLOW on overflow or if length is too large to encode. */
+static inline size_t der_tlv_total_size(size_t inner_len)
+{
+    size_t len_size;
+    if (pqc_asn1_der_length_size(inner_len, &len_size) != PQC_ASN1_OK)
+        return PQC_SIZE_OVERFLOW;
+    size_t total = safe_add(safe_add(1, len_size), inner_len);
+    return total;  /* PQC_SIZE_OVERFLOW if safe_add overflowed */
+}
+
+/* Write DER length field into out.  Returns number of bytes written,
+ * or 0 on overflow.  Caller must ensure out has at least 5 bytes. */
+static inline size_t der_write_length(uint8_t *out, size_t len)
+{
+    size_t n;
+    if (pqc_asn1_der_length_size(len, &n) != PQC_ASN1_OK)
+        return 0;  /* too large to encode */
+    if (n == 1) {
+        out[0] = (uint8_t)len;
+    } else {
+        size_t num_bytes = n - 1;
+        size_t i;
+        out[0] = (uint8_t)(0x80 | num_bytes);
+        for (i = 1; i <= num_bytes; i++)
+            out[i] = (uint8_t)(len >> (8 * (num_bytes - i)));
+    }
+    return n;
+}
+
+/* Write DER length, returning status.  Advances *p by bytes written.
+ * Used by _write functions to guard against der_write_length returning 0. */
+static inline pqc_asn1_status_t der_write_length_safe(uint8_t **p, size_t len)
+{
+    size_t n = der_write_length(*p, len);
+    if (n == 0) return PQC_ASN1_ERR_OVERFLOW;
+    *p += n;
+    return PQC_ASN1_OK;
+}
+
+
+
+/* ================================================================== */
+/* Concatenated from: src/tlv.c */
+/* ================================================================== */
+
+
+
+/* ------------------------------------------------------------------ */
+/* Version                                                             */
+/* ------------------------------------------------------------------ */
+
+const char *pqc_asn1_version(void)
+{
+    return PQC_ASN1_VERSION_STRING;
 }
 
 /* ------------------------------------------------------------------ */
@@ -137,47 +164,9 @@ pqc_asn1_status_t pqc_asn1_der_length_size(size_t len, size_t *out)
     return PQC_ASN1_ERR_OVERFLOW;
 }
 
-/* Compute total TLV size for a given content length: 1 (tag) + length field + content.
- * Returns PQC_SIZE_OVERFLOW on overflow or if length is too large to encode. */
-static size_t der_tlv_total_size(size_t inner_len)
-{
-    size_t len_size;
-    if (pqc_asn1_der_length_size(inner_len, &len_size) != PQC_ASN1_OK)
-        return PQC_SIZE_OVERFLOW;
-    size_t total = safe_add(safe_add(1, len_size), inner_len);
-    return total;  /* PQC_SIZE_OVERFLOW if safe_add overflowed */
-}
-
-/* Write DER length field into out.  Returns number of bytes written,
- * or 0 on overflow.  Caller must ensure out has at least 5 bytes.
- * Delegates threshold logic to pqc_asn1_der_length_size. */
-static size_t der_write_length(uint8_t *out, size_t len)
-{
-    size_t n;
-    if (pqc_asn1_der_length_size(len, &n) != PQC_ASN1_OK)
-        return 0;  /* too large to encode */
-
-    if (n == 1) {
-        out[0] = (uint8_t)len;
-    } else {
-        size_t num_bytes = n - 1;
-        out[0] = (uint8_t)(0x80 | num_bytes);
-        size_t i;
-        for (i = 1; i <= num_bytes; i++)
-            out[i] = (uint8_t)(len >> (8 * (num_bytes - i)));
-    }
-    return n;
-}
-
-/* Write DER length, returning status.  Advances *p by bytes written.
- * Used by _write functions to guard against der_write_length returning 0. */
-static pqc_asn1_status_t der_write_length_safe(uint8_t **p, size_t len)
-{
-    size_t n = der_write_length(*p, len);
-    if (n == 0) return PQC_ASN1_ERR_OVERFLOW;
-    *p += n;
-    return PQC_ASN1_OK;
-}
+/* Note: der_tlv_total_size, der_write_length, der_write_length_safe, safe_add,
+ * and PQC_SIZE_OVERFLOW are defined as static inline in pqc_asn1_internal.h
+ * so they are available to all translation units. */
 
 pqc_asn1_status_t pqc_asn1_der_write_tlv_write(
     uint8_t tag, const uint8_t *content, size_t content_len,
@@ -296,6 +285,42 @@ pqc_asn1_status_t pqc_asn1_der_read_tlv(
     return PQC_ASN1_OK;
 }
 
+
+/* ------------------------------------------------------------------ */
+/* Error description                                                   */
+/* ------------------------------------------------------------------ */
+
+const char *pqc_asn1_error_message(pqc_asn1_status_t code)
+{
+    switch (code) {
+    case PQC_ASN1_OK:                   return "success";
+    case PQC_ASN1_ERR_OUTER_SEQUENCE:   return "invalid or missing outer SEQUENCE";
+    case PQC_ASN1_ERR_VERSION:          return "invalid or missing version (expected INTEGER 0)";
+    case PQC_ASN1_ERR_ALGORITHM:        return "invalid or missing AlgorithmIdentifier";
+    case PQC_ASN1_ERR_KEY:              return "invalid or missing key element";
+    case PQC_ASN1_ERR_UNUSED_BITS:      return "BIT STRING has non-zero unused-bits byte";
+    case PQC_ASN1_ERR_TRAILING_DATA:    return "unexpected trailing data after outer SEQUENCE";
+    case PQC_ASN1_ERR_PEM_NO_MARKERS:   return "no valid PEM markers found";
+    case PQC_ASN1_ERR_PEM_LABEL:        return "PEM label invalid or mismatched";
+    case PQC_ASN1_ERR_BASE64:           return "invalid Base64 data";
+    case PQC_ASN1_ERR_INVALID_OID:      return "oid_der is not a valid OID TLV";
+    case PQC_ASN1_ERR_EXTRA_FIELDS:     return "unexpected extra fields inside structure";
+    case PQC_ASN1_ERR_OVERFLOW:         return "size overflow in computation";
+    case PQC_ASN1_ERR_ALLOC:            return "memory allocation failed";
+    case PQC_ASN1_ERR_BUFFER_TOO_SMALL: return "caller-provided buffer is too small";
+    case PQC_ASN1_ERR_LABEL_TOO_LONG:   return "PEM label exceeds maximum length";
+    case PQC_ASN1_ERR_DER_PARSE:        return "DER parse error";
+    case PQC_ASN1_ERR_NULL_PARAM:       return "required pointer parameter is NULL";
+    case PQC_ASN1_ERR_PEM_MALFORMED:   return "PEM boundary line has trailing non-whitespace";
+    }
+    return "unknown error";
+}
+
+/* ================================================================== */
+/* Concatenated from: src/builder.c */
+/* ================================================================== */
+
+
 /* ------------------------------------------------------------------ */
 /* Internal: SPKI layout (shared between _size and _write)             */
 /* ------------------------------------------------------------------ */
@@ -338,25 +363,29 @@ static pqc_asn1_status_t validate_oid_tlv(const uint8_t *oid_der, size_t oid_der
     return PQC_ASN1_OK;
 }
 
-/* Compute AlgorithmIdentifier SEQUENCE { OID } total size.
+/* Compute AlgorithmIdentifier SEQUENCE { OID [params] } total size.
+ * params_len == 0 means no parameters (OID-only AlgorithmIdentifier).
  * Shared between SPKI and PKCS#8 layout computation. */
 static pqc_asn1_status_t alg_id_compute_size(const uint8_t *oid_der, size_t oid_der_len,
+                                               size_t params_len,
                                                size_t *alg_inner_out, size_t *alg_total_out)
 {
     pqc_asn1_status_t rc = validate_oid_tlv(oid_der, oid_der_len);
     if (rc != PQC_ASN1_OK) return rc;
 
-    *alg_inner_out = oid_der_len;
+    *alg_inner_out = safe_add(oid_der_len, params_len);
+    if (*alg_inner_out == PQC_SIZE_OVERFLOW) return PQC_ASN1_ERR_OVERFLOW;
     *alg_total_out = der_tlv_total_size(*alg_inner_out);
     if (*alg_total_out == PQC_SIZE_OVERFLOW) return PQC_ASN1_ERR_OVERFLOW;
     return PQC_ASN1_OK;
 }
 
-static pqc_asn1_status_t spki_compute_layout(spki_layout_t *l,
-                                               const uint8_t *oid_der, size_t oid_der_len,
-                                               size_t pk_len)
+static pqc_asn1_status_t spki_compute_layout_ex(spki_layout_t *l,
+                                                  const uint8_t *oid_der, size_t oid_der_len,
+                                                  size_t params_len, size_t pk_len)
 {
     pqc_asn1_status_t rc = alg_id_compute_size(oid_der, oid_der_len,
+                                                params_len,
                                                 &l->alg_inner, &l->alg_total);
     if (rc != PQC_ASN1_OK) return rc;
 
@@ -375,6 +404,13 @@ static pqc_asn1_status_t spki_compute_layout(spki_layout_t *l,
     return PQC_ASN1_OK;
 }
 
+static pqc_asn1_status_t spki_compute_layout(spki_layout_t *l,
+                                               const uint8_t *oid_der, size_t oid_der_len,
+                                               size_t pk_len)
+{
+    return spki_compute_layout_ex(l, oid_der, oid_der_len, 0, pk_len);
+}
+
 /* ------------------------------------------------------------------ */
 /* Internal: PKCS#8 layout (shared between _size and _write)           */
 /* ------------------------------------------------------------------ */
@@ -387,24 +423,28 @@ static const uint8_t PKCS8_VERSION_TLV[] = {0x02, 0x01, 0x00};
  *
  *   SEQUENCE (total) {
  *     INTEGER 0 (version)
- *     SEQUENCE (alg_total) { OID (alg_inner) }
+ *     SEQUENCE (alg_total) { OID [params] (alg_inner) }
  *     OCTET STRING (os_total) { sk_bytes (os_inner) }
+ *     [1] IMPLICIT (pub_total) { pub_bytes }   -- optional publicKey field
  *   }
  */
 typedef struct {
-    size_t alg_inner;   /* AlgorithmIdentifier content (= OID TLV) */
+    size_t alg_inner;   /* AlgorithmIdentifier content (= OID TLV [+ params]) */
     size_t alg_total;   /* AlgorithmIdentifier SEQUENCE TLV */
     size_t os_inner;    /* OCTET STRING content (= sk_len) */
     size_t os_total;    /* OCTET STRING TLV */
+    size_t pub_total;   /* publicKey [1] TLV size (0 if absent) */
     size_t seq_inner;   /* outer SEQUENCE content */
     size_t total;       /* outer SEQUENCE TLV (final DER size) */
 } pkcs8_layout_t;
 
-static pqc_asn1_status_t pkcs8_compute_layout(pkcs8_layout_t *l,
-                                                const uint8_t *oid_der, size_t oid_der_len,
-                                                size_t sk_len)
+static pqc_asn1_status_t pkcs8_compute_layout_ex(pkcs8_layout_t *l,
+                                                   const uint8_t *oid_der, size_t oid_der_len,
+                                                   size_t params_len, size_t sk_len,
+                                                   size_t pub_len)
 {
     pqc_asn1_status_t rc = alg_id_compute_size(oid_der, oid_der_len,
+                                                params_len,
                                                 &l->alg_inner, &l->alg_total);
     if (rc != PQC_ASN1_OK) return rc;
 
@@ -412,7 +452,16 @@ static pqc_asn1_status_t pkcs8_compute_layout(pkcs8_layout_t *l,
     l->os_total = der_tlv_total_size(l->os_inner);
     if (l->os_total == PQC_SIZE_OVERFLOW) return PQC_ASN1_ERR_OVERFLOW;
 
-    l->seq_inner = safe_add(safe_add(sizeof(PKCS8_VERSION_TLV), l->alg_total), l->os_total);
+    if (pub_len > 0) {
+        l->pub_total = der_tlv_total_size(pub_len);
+        if (l->pub_total == PQC_SIZE_OVERFLOW) return PQC_ASN1_ERR_OVERFLOW;
+    } else {
+        l->pub_total = 0;
+    }
+
+    l->seq_inner = safe_add(
+        safe_add(safe_add(sizeof(PKCS8_VERSION_TLV), l->alg_total), l->os_total),
+        l->pub_total);
     if (l->seq_inner == PQC_SIZE_OVERFLOW) return PQC_ASN1_ERR_OVERFLOW;
 
     l->total = der_tlv_total_size(l->seq_inner);
@@ -421,34 +470,52 @@ static pqc_asn1_status_t pkcs8_compute_layout(pkcs8_layout_t *l,
     return PQC_ASN1_OK;
 }
 
+static pqc_asn1_status_t pkcs8_compute_layout(pkcs8_layout_t *l,
+                                                const uint8_t *oid_der, size_t oid_der_len,
+                                                size_t sk_len)
+{
+    return pkcs8_compute_layout_ex(l, oid_der, oid_der_len, 0, sk_len, 0);
+}
+
 /* ------------------------------------------------------------------ */
 /* DER structure builders                                              */
 /* ------------------------------------------------------------------ */
 
-pqc_asn1_status_t pqc_asn1_spki_der_size(const uint8_t *oid_der, size_t oid_der_len,
-                                            size_t pk_len, size_t *out_size)
+pqc_asn1_status_t pqc_asn1_spki_size_ex(
+    const uint8_t *oid_der, size_t oid_der_len,
+    const uint8_t *params, size_t params_len,
+    size_t pk_len, size_t *out_size)
 {
     if (!out_size) return PQC_ASN1_ERR_NULL_PARAM;
     *out_size = 0;
     if (!oid_der) return PQC_ASN1_ERR_NULL_PARAM;
+    if (params_len > 0 && !params) return PQC_ASN1_ERR_NULL_PARAM;
     spki_layout_t l;
-    pqc_asn1_status_t rc = spki_compute_layout(&l, oid_der, oid_der_len, pk_len);
+    pqc_asn1_status_t rc = spki_compute_layout_ex(&l, oid_der, oid_der_len, params_len, pk_len);
     if (rc != PQC_ASN1_OK) return rc;
     *out_size = l.total;
     return PQC_ASN1_OK;
 }
 
-pqc_asn1_status_t pqc_asn1_build_pk_spki_der_write(
+pqc_asn1_status_t pqc_asn1_spki_size(const uint8_t *oid_der, size_t oid_der_len,
+                                       size_t pk_len, size_t *out_size)
+{
+    return pqc_asn1_spki_size_ex(oid_der, oid_der_len, NULL, 0, pk_len, out_size);
+}
+
+pqc_asn1_status_t pqc_asn1_spki_build_write_ex(
     uint8_t *buf, size_t buf_len,
     const uint8_t *oid_der, size_t oid_der_len,
+    const uint8_t *params, size_t params_len,
     const uint8_t *pk_bytes, size_t pk_len,
     size_t *out_written)
 {
     if (!buf || !oid_der || !pk_bytes || !out_written) return PQC_ASN1_ERR_NULL_PARAM;
+    if (params_len > 0 && !params) return PQC_ASN1_ERR_NULL_PARAM;
     *out_written = 0;
 
     spki_layout_t l;
-    pqc_asn1_status_t rc = spki_compute_layout(&l, oid_der, oid_der_len, pk_len);
+    pqc_asn1_status_t rc = spki_compute_layout_ex(&l, oid_der, oid_der_len, params_len, pk_len);
     if (rc != PQC_ASN1_OK) return rc;
     if (buf_len < l.total)
         return PQC_ASN1_ERR_BUFFER_TOO_SMALL;
@@ -460,12 +527,16 @@ pqc_asn1_status_t pqc_asn1_build_pk_spki_der_write(
     rc = der_write_length_safe(&p, l.seq_inner);
     if (rc != PQC_ASN1_OK) return rc;
 
-    /* AlgorithmIdentifier SEQUENCE { OID } */
+    /* AlgorithmIdentifier SEQUENCE { OID [params] } */
     *p++ = 0x30;
     rc = der_write_length_safe(&p, l.alg_inner);
     if (rc != PQC_ASN1_OK) return rc;
     memcpy(p, oid_der, oid_der_len);
     p += oid_der_len;
+    if (params_len > 0) {
+        memcpy(p, params, params_len);
+        p += params_len;
+    }
 
     /* BIT STRING { 0x00 unused-bits, key bytes } */
     *p++ = 0x03;
@@ -478,7 +549,17 @@ pqc_asn1_status_t pqc_asn1_build_pk_spki_der_write(
     return PQC_ASN1_OK;
 }
 
-pqc_asn1_status_t pqc_asn1_build_pk_spki_der(
+pqc_asn1_status_t pqc_asn1_spki_build_write(
+    uint8_t *buf, size_t buf_len,
+    const uint8_t *oid_der, size_t oid_der_len,
+    const uint8_t *pk_bytes, size_t pk_len,
+    size_t *out_written)
+{
+    return pqc_asn1_spki_build_write_ex(
+        buf, buf_len, oid_der, oid_der_len, NULL, 0, pk_bytes, pk_len, out_written);
+}
+
+pqc_asn1_status_t pqc_asn1_spki_build(
     const uint8_t *oid_der, size_t oid_der_len,
     const uint8_t *pk_bytes, size_t pk_len,
     uint8_t **out_buf, size_t *out_total)
@@ -495,7 +576,7 @@ pqc_asn1_status_t pqc_asn1_build_pk_spki_der(
     uint8_t *buf = (uint8_t *)PQC_ASN1_MALLOC(l.total);
     if (!buf) return PQC_ASN1_ERR_ALLOC;
     size_t written;
-    rc = pqc_asn1_build_pk_spki_der_write(
+    rc = pqc_asn1_spki_build_write(
         buf, l.total, oid_der, oid_der_len, pk_bytes, pk_len, &written);
     if (rc != PQC_ASN1_OK) { PQC_ASN1_FREE(buf); return rc; }
     *out_buf = buf;
@@ -503,33 +584,49 @@ pqc_asn1_status_t pqc_asn1_build_pk_spki_der(
     return PQC_ASN1_OK;
 }
 
-pqc_asn1_status_t pqc_asn1_pkcs8_der_size(const uint8_t *oid_der, size_t oid_der_len,
-                                             size_t sk_len, size_t *out_size)
+pqc_asn1_status_t pqc_asn1_pkcs8_size_ex(
+    const uint8_t *oid_der, size_t oid_der_len,
+    const uint8_t *params, size_t params_len,
+    size_t sk_len, size_t pub_len, size_t *out_size)
 {
     if (!out_size) return PQC_ASN1_ERR_NULL_PARAM;
     *out_size = 0;
     if (!oid_der) return PQC_ASN1_ERR_NULL_PARAM;
+    if (params_len > 0 && !params) return PQC_ASN1_ERR_NULL_PARAM;
     pkcs8_layout_t l;
-    pqc_asn1_status_t rc = pkcs8_compute_layout(&l, oid_der, oid_der_len, sk_len);
+    pqc_asn1_status_t rc = pkcs8_compute_layout_ex(&l, oid_der, oid_der_len,
+                                                    params_len, sk_len, pub_len);
     if (rc != PQC_ASN1_OK) return rc;
     *out_size = l.total;
     return PQC_ASN1_OK;
 }
 
-/* Write PKCS#8 DER into a caller-provided buffer.
+pqc_asn1_status_t pqc_asn1_pkcs8_size(const uint8_t *oid_der, size_t oid_der_len,
+                                        size_t sk_len, size_t *out_size)
+{
+    return pqc_asn1_pkcs8_size_ex(oid_der, oid_der_len, NULL, 0, sk_len, 0, out_size);
+}
+
+/* Write PKCS#8 DER with optional AlgorithmIdentifier parameters and
+ * OneAsymmetricKey publicKey [1] field into a caller-provided buffer.
  * Error paths securely zero the buffer because it may contain partial
  * secret key material — callers should not need to handle this. */
-pqc_asn1_status_t pqc_asn1_build_sk_pkcs8_der_write(
+pqc_asn1_status_t pqc_asn1_pkcs8_build_write_ex(
     uint8_t *buf, size_t buf_len,
     const uint8_t *oid_der, size_t oid_der_len,
+    const uint8_t *params, size_t params_len,
     const uint8_t *sk_bytes, size_t sk_len,
+    const uint8_t *pub_bytes, size_t pub_len,
     size_t *out_written)
 {
     if (!buf || !oid_der || !sk_bytes || !out_written) return PQC_ASN1_ERR_NULL_PARAM;
+    if (params_len > 0 && !params) return PQC_ASN1_ERR_NULL_PARAM;
+    if (pub_len > 0 && !pub_bytes) return PQC_ASN1_ERR_NULL_PARAM;
     *out_written = 0;
 
     pkcs8_layout_t l;
-    pqc_asn1_status_t rc = pkcs8_compute_layout(&l, oid_der, oid_der_len, sk_len);
+    pqc_asn1_status_t rc = pkcs8_compute_layout_ex(&l, oid_der, oid_der_len,
+                                                    params_len, sk_len, pub_len);
     if (rc != PQC_ASN1_OK) return rc;
     if (buf_len < l.total)
         return PQC_ASN1_ERR_BUFFER_TOO_SMALL;
@@ -545,24 +642,50 @@ pqc_asn1_status_t pqc_asn1_build_sk_pkcs8_der_write(
     memcpy(p, PKCS8_VERSION_TLV, sizeof(PKCS8_VERSION_TLV));
     p += sizeof(PKCS8_VERSION_TLV);
 
-    /* AlgorithmIdentifier SEQUENCE { OID } */
+    /* AlgorithmIdentifier SEQUENCE { OID [params] } */
     *p++ = 0x30;
     rc = der_write_length_safe(&p, l.alg_inner);
     if (rc != PQC_ASN1_OK) { pqc_asn1_secure_zero(buf, buf_len); return rc; }
     memcpy(p, oid_der, oid_der_len);
     p += oid_der_len;
+    if (params_len > 0) {
+        memcpy(p, params, params_len);
+        p += params_len;
+    }
 
     /* OCTET STRING { key bytes } */
     *p++ = 0x04;
     rc = der_write_length_safe(&p, l.os_inner);
     if (rc != PQC_ASN1_OK) { pqc_asn1_secure_zero(buf, buf_len); return rc; }
     memcpy(p, sk_bytes, sk_len);
+    p += sk_len;
+
+    /* Optional publicKey [1] IMPLICIT (tag 0x81) */
+    if (pub_len > 0) {
+        *p++ = 0x81;
+        rc = der_write_length_safe(&p, pub_len);
+        if (rc != PQC_ASN1_OK) { pqc_asn1_secure_zero(buf, buf_len); return rc; }
+        memcpy(p, pub_bytes, pub_len);
+    }
 
     *out_written = l.total;
     return PQC_ASN1_OK;
 }
 
-pqc_asn1_status_t pqc_asn1_build_sk_pkcs8_der(
+/* Write PKCS#8 DER into a caller-provided buffer (no params, no publicKey).
+ * Error paths securely zero the buffer because it may contain partial
+ * secret key material — callers should not need to handle this. */
+pqc_asn1_status_t pqc_asn1_pkcs8_build_write(
+    uint8_t *buf, size_t buf_len,
+    const uint8_t *oid_der, size_t oid_der_len,
+    const uint8_t *sk_bytes, size_t sk_len,
+    size_t *out_written)
+{
+    return pqc_asn1_pkcs8_build_write_ex(
+        buf, buf_len, oid_der, oid_der_len, NULL, 0, sk_bytes, sk_len, NULL, 0, out_written);
+}
+
+pqc_asn1_status_t pqc_asn1_pkcs8_build(
     const uint8_t *oid_der, size_t oid_der_len,
     const uint8_t *sk_bytes, size_t sk_len,
     uint8_t **out_buf, size_t *out_total)
@@ -579,7 +702,7 @@ pqc_asn1_status_t pqc_asn1_build_sk_pkcs8_der(
     uint8_t *buf = (uint8_t *)PQC_ASN1_MALLOC(l.total);
     if (!buf) return PQC_ASN1_ERR_ALLOC;
     size_t written;
-    rc = pqc_asn1_build_sk_pkcs8_der_write(
+    rc = pqc_asn1_pkcs8_build_write(
         buf, l.total, oid_der, oid_der_len, sk_bytes, sk_len, &written);
     if (rc != PQC_ASN1_OK) { PQC_ASN1_FREE(buf); return rc; }
     *out_buf = buf;
@@ -587,17 +710,26 @@ pqc_asn1_status_t pqc_asn1_build_sk_pkcs8_der(
     return PQC_ASN1_OK;
 }
 
+
+/* ================================================================== */
+/* Concatenated from: src/parser.c */
+/* ================================================================== */
+
+
 /* ------------------------------------------------------------------ */
 /* Internal: shared AlgorithmIdentifier parser                         */
 /* ------------------------------------------------------------------ */
 
 /* Parse AlgorithmIdentifier SEQUENCE from within an outer SEQUENCE.
- * Reads the SEQUENCE { OID } and enforces RFC 9629 (no trailing parameters).
- * On success, *oid_out points to the full OID TLV and *oid_len_out is its size.
- * Advances *pos past the AlgorithmIdentifier SEQUENCE. */
+ * Reads the OID TLV and captures any trailing bytes as parameters.
+ * On success, *oid_out points to the OID TLV and *params_out to the
+ * optional parameters (NULL/0 if absent).  Advances *pos past the
+ * AlgorithmIdentifier SEQUENCE.
+ * Pass NULL for params_out/params_len_out to discard parameters. */
 static pqc_asn1_status_t parse_algorithm_identifier(
     const uint8_t *seq, size_t seq_len, size_t *pos,
-    const uint8_t **oid_out, size_t *oid_len_out)
+    const uint8_t **oid_out, size_t *oid_len_out,
+    const uint8_t **params_out, size_t *params_len_out)
 {
     const uint8_t *alg_content;
     size_t alg_len;
@@ -612,15 +744,27 @@ static pqc_asn1_status_t parse_algorithm_identifier(
                                 &oid_content, &oid_content_len) != PQC_ASN1_OK)
         return PQC_ASN1_ERR_ALGORITHM;
 
-    /* RFC 9629: PQC AlgorithmIdentifiers must contain only the OID. */
-    if (alg_pos != alg_len)
-        return PQC_ASN1_ERR_EXTRA_FIELDS;
-
-    /* alg_pos started at 0 and advanced past the OID TLV, so it equals
-     * the full OID TLV size (tag + length + content). */
+    /* alg_pos now equals the full OID TLV size (tag + length + content). */
     size_t oid_tlv_len = alg_pos;
     *oid_out = alg_content;
     *oid_len_out = oid_tlv_len;
+
+    /* Capture optional AlgorithmIdentifier parameters (bytes after OID).
+     * If params_out is NULL the caller does not accept parameters; any
+     * trailing bytes in the AlgorithmIdentifier are rejected as extra
+     * fields (strict RFC 9629 mode). */
+    if (alg_pos < alg_len) {
+        if (params_out && params_len_out) {
+            *params_out = alg_content + alg_pos;
+            *params_len_out = alg_len - alg_pos;
+        } else {
+            return PQC_ASN1_ERR_EXTRA_FIELDS;
+        }
+    } else {
+        if (params_out) *params_out = NULL;
+        if (params_len_out) *params_len_out = 0;
+    }
+
     return PQC_ASN1_OK;
 }
 
@@ -628,9 +772,10 @@ static pqc_asn1_status_t parse_algorithm_identifier(
 /* DER structure parsers                                               */
 /* ------------------------------------------------------------------ */
 
-pqc_asn1_status_t pqc_asn1_parse_pk_spki_der(
+pqc_asn1_status_t pqc_asn1_spki_parse(
     const uint8_t *der, size_t der_len,
     const uint8_t **oid_der, size_t *oid_der_len,
+    const uint8_t **alg_params, size_t *alg_params_len,
     const uint8_t **pk_bytes, size_t *pk_len)
 {
     if (!der || !oid_der || !oid_der_len || !pk_bytes || !pk_len)
@@ -649,9 +794,10 @@ pqc_asn1_status_t pqc_asn1_parse_pk_spki_der(
 
     size_t inner_pos = 0;
 
-    /* AlgorithmIdentifier SEQUENCE { OID } */
+    /* AlgorithmIdentifier SEQUENCE { OID [params] } */
     pqc_asn1_status_t alg_rc = parse_algorithm_identifier(
-        seq_content, seq_len, &inner_pos, oid_der, oid_der_len);
+        seq_content, seq_len, &inner_pos, oid_der, oid_der_len,
+        alg_params, alg_params_len);
     if (alg_rc != PQC_ASN1_OK) return alg_rc;
 
     /* BIT STRING */
@@ -674,10 +820,12 @@ pqc_asn1_status_t pqc_asn1_parse_pk_spki_der(
     return PQC_ASN1_OK;
 }
 
-pqc_asn1_status_t pqc_asn1_parse_sk_pkcs8_der(
+pqc_asn1_status_t pqc_asn1_pkcs8_parse(
     const uint8_t *der, size_t der_len,
     const uint8_t **oid_der, size_t *oid_der_len,
-    const uint8_t **sk_bytes, size_t *sk_len)
+    const uint8_t **alg_params, size_t *alg_params_len,
+    const uint8_t **sk_bytes, size_t *sk_len,
+    const uint8_t **pub_key, size_t *pub_key_len)
 {
     if (!der || !oid_der || !oid_der_len || !sk_bytes || !sk_len)
         return PQC_ASN1_ERR_NULL_PARAM;
@@ -704,9 +852,10 @@ pqc_asn1_status_t pqc_asn1_parse_sk_pkcs8_der(
     if (int_len != 1 || int_content[0] != 0x00)
         return PQC_ASN1_ERR_VERSION;
 
-    /* AlgorithmIdentifier SEQUENCE { OID } */
+    /* AlgorithmIdentifier SEQUENCE { OID [params] } */
     pqc_asn1_status_t alg_rc = parse_algorithm_identifier(
-        seq_content, seq_len, &inner_pos, oid_der, oid_der_len);
+        seq_content, seq_len, &inner_pos, oid_der, oid_der_len,
+        alg_params, alg_params_len);
     if (alg_rc != PQC_ASN1_OK) return alg_rc;
 
     /* OCTET STRING (secret key) */
@@ -716,17 +865,42 @@ pqc_asn1_status_t pqc_asn1_parse_sk_pkcs8_der(
                                 &os_content, &os_len) != PQC_ASN1_OK)
         return PQC_ASN1_ERR_KEY;
 
-    /* Reject extra fields inside outer SEQUENCE */
-    if (inner_pos != seq_len)
-        return PQC_ASN1_ERR_EXTRA_FIELDS;
-
     *sk_bytes = os_content;
     *sk_len = os_len;
+
+    /* Optional publicKey [1] IMPLICIT BIT STRING (RFC 9629 / RFC 5958 §3).
+     * Tag 0x81 = CONTEXT-SPECIFIC[1] PRIMITIVE.  Only accepted if no other
+     * unrecognised fields follow; silently skip if caller passes NULL. */
+    if (pub_key) *pub_key = NULL;
+    if (pub_key_len) *pub_key_len = 0;
+
+    if (inner_pos < seq_len) {
+        /* Accept [1] IMPLICIT BIT STRING — store if caller wants it. */
+        if (seq_content[inner_pos] == 0x81) {
+            const uint8_t *pk_content;
+            size_t pk_len_val;
+            if (pqc_asn1_der_read_tlv(seq_content, seq_len, &inner_pos, 0x81,
+                                       &pk_content, &pk_len_val) != PQC_ASN1_OK)
+                return PQC_ASN1_ERR_KEY;
+            if (pub_key) *pub_key = pk_content;
+            if (pub_key_len) *pub_key_len = pk_len_val;
+        }
+    }
+
+    /* Reject any remaining unrecognised fields. */
+    if (inner_pos != seq_len)
+        return PQC_ASN1_ERR_EXTRA_FIELDS;
 
     return PQC_ASN1_OK;
 }
 
 /* ------------------------------------------------------------------ */
+
+/* ================================================================== */
+/* Concatenated from: src/base64.c */
+/* ================================================================== */
+
+
 /* Base64 codec                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -1058,6 +1232,12 @@ pqc_asn1_status_t pqc_asn1_base64_decode(
 }
 
 /* ------------------------------------------------------------------ */
+
+/* ================================================================== */
+/* Concatenated from: src/pem.c */
+/* ================================================================== */
+
+
 /* PEM — internal helpers                                              */
 /* ------------------------------------------------------------------ */
 
@@ -1451,31 +1631,3 @@ pqc_asn1_status_t pqc_asn1_pem_decode_auto(
 }
 
 /* ------------------------------------------------------------------ */
-/* Error description                                                   */
-/* ------------------------------------------------------------------ */
-
-const char *pqc_asn1_error_message(pqc_asn1_status_t code)
-{
-    switch (code) {
-    case PQC_ASN1_OK:                   return "success";
-    case PQC_ASN1_ERR_OUTER_SEQUENCE:   return "invalid or missing outer SEQUENCE";
-    case PQC_ASN1_ERR_VERSION:          return "invalid or missing version (expected INTEGER 0)";
-    case PQC_ASN1_ERR_ALGORITHM:        return "invalid or missing AlgorithmIdentifier";
-    case PQC_ASN1_ERR_KEY:              return "invalid or missing key element";
-    case PQC_ASN1_ERR_UNUSED_BITS:      return "BIT STRING has non-zero unused-bits byte";
-    case PQC_ASN1_ERR_TRAILING_DATA:    return "unexpected trailing data after outer SEQUENCE";
-    case PQC_ASN1_ERR_PEM_NO_MARKERS:   return "no valid PEM markers found";
-    case PQC_ASN1_ERR_PEM_LABEL:        return "PEM label invalid or mismatched";
-    case PQC_ASN1_ERR_BASE64:           return "invalid Base64 data";
-    case PQC_ASN1_ERR_INVALID_OID:      return "oid_der is not a valid OID TLV";
-    case PQC_ASN1_ERR_EXTRA_FIELDS:     return "unexpected extra fields inside structure";
-    case PQC_ASN1_ERR_OVERFLOW:         return "size overflow in computation";
-    case PQC_ASN1_ERR_ALLOC:            return "memory allocation failed";
-    case PQC_ASN1_ERR_BUFFER_TOO_SMALL: return "caller-provided buffer is too small";
-    case PQC_ASN1_ERR_LABEL_TOO_LONG:   return "PEM label exceeds maximum length";
-    case PQC_ASN1_ERR_DER_PARSE:        return "DER parse error";
-    case PQC_ASN1_ERR_NULL_PARAM:       return "required pointer parameter is NULL";
-    case PQC_ASN1_ERR_PEM_MALFORMED:   return "PEM boundary line has trailing non-whitespace";
-    }
-    return "unknown error";
-}

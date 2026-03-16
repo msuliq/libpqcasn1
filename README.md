@@ -17,11 +17,13 @@ libpqcasn1 provides exactly this: a minimal, auditable, dependency-free codec fo
 
 - **Algorithm-agnostic** -- works with any PQC scheme (ML-DSA, ML-KEM, SLH-DSA, and future algorithms) that uses standard SPKI/PKCS#8 wrapping
 - **Zero external dependencies** -- only requires the C standard library (C11)
-- **Single-file implementation** -- one header (`pqc_asn1.h`) + one source file (`pqc_asn1.c`)
+- **Multi-file implementation** -- one header (`pqc_asn1.h`) + five focused translation units; `src/pqc_asn1.c` is a generated single-file distribution artifact (`make concat`)
 - **Dual API pattern** -- every operation has both an allocating variant and a write-into-buffer variant
 - **Configurable allocator** -- override `PQC_ASN1_MALLOC`/`PQC_ASN1_FREE` for custom memory management (e.g. Ruby's `ruby_xmalloc`/`ruby_xfree`)
 - **Secure memory handling** -- secret key buffers are securely zeroed on error and deallocation using platform-optimized primitives
-- **Strict validation** -- DER canonical form enforcement, RFC 7468 PEM boundary rules, RFC 4648 base64 padding strictness, RFC 9629 AlgorithmIdentifier rules
+- **Flexible AlgorithmIdentifier handling** -- parsers capture optional parameters rather than rejecting them; `_ex` builder variants accept optional parameter blobs for non-RFC-9629 algorithms
+- **Optional PKCS#8 publicKey field** -- RFC 5958 `publicKey [1] IMPLICIT` field supported in both builder and parser
+- **Strict validation** -- DER canonical form enforcement, RFC 7468 PEM boundary rules, RFC 4648 base64 padding strictness
 - **Overflow-safe arithmetic** -- all size computations use checked addition to prevent integer overflow
 - **Comprehensive error codes** -- 18 distinct status codes for precise error diagnosis
 - **Cross-platform** -- builds and tests on Linux (GCC, Clang), macOS (AppleClang), and Windows (MSVC)
@@ -52,7 +54,7 @@ cmake --install build
 
 ### Embed directly in your project
 
-Copy `include/pqc_asn1.h` and `src/pqc_asn1.c` into your project and compile them alongside your code. No build system integration needed.
+Copy `include/pqc_asn1.h` and `src/pqc_asn1.c` (the generated single-file artifact) into your project and compile them alongside your code. No build system integration needed. Regenerate `src/pqc_asn1.c` with `make concat` after modifying the individual translation units.
 
 ## Usage examples
 
@@ -70,7 +72,7 @@ void encode_public_key(const uint8_t *pk, size_t pk_len) {
     uint8_t *der = NULL;
     size_t der_len = 0;
 
-    pqc_asn1_status_t rc = pqc_asn1_build_pk_spki_der(
+    pqc_asn1_status_t rc = pqc_asn1_spki_build(
         ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
         pk, pk_len,
         &der, &der_len);
@@ -93,7 +95,7 @@ void encode_private_key(const uint8_t *sk, size_t sk_len) {
     uint8_t *der = NULL;
     size_t der_len = 0;
 
-    pqc_asn1_status_t rc = pqc_asn1_build_sk_pkcs8_der(
+    pqc_asn1_status_t rc = pqc_asn1_pkcs8_build(
         ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
         sk, sk_len,
         &der, &der_len);
@@ -157,13 +159,17 @@ void pem_to_der(const char *pem, size_t pem_len) {
 
 ```c
 void parse_public_key(const uint8_t *der, size_t der_len) {
-    const uint8_t *oid, *pk;
-    size_t oid_len, pk_len;
+    const uint8_t *oid, *pk, *alg_params;
+    size_t oid_len, pk_len, alg_params_len;
 
-    pqc_asn1_status_t rc = pqc_asn1_parse_pk_spki_der(
+    const uint8_t *alg_params;
+    size_t alg_params_len;
+
+    pqc_asn1_status_t rc = pqc_asn1_spki_parse(
         der, der_len,
-        &oid, &oid_len,    /* points into der -- no allocation */
-        &pk, &pk_len);     /* points into der -- no allocation */
+        &oid, &oid_len,             /* points into der -- no allocation */
+        &alg_params, &alg_params_len, /* NULL/0 if no AlgorithmIdentifier params */
+        &pk, &pk_len);              /* points into der -- no allocation */
 
     if (rc == PQC_ASN1_OK) {
         /* oid/oid_len is the full OID TLV */
@@ -177,12 +183,12 @@ void parse_public_key(const uint8_t *der, size_t der_len) {
 ```c
 void encode_spki_no_alloc(const uint8_t *pk, size_t pk_len) {
     size_t needed;
-    pqc_asn1_spki_der_size(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
-                            pk_len, &needed);
+    pqc_asn1_spki_size(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
+                       pk_len, &needed);
 
     uint8_t buf[4096];  /* or stack/caller-provided buffer */
     size_t written;
-    pqc_asn1_status_t rc = pqc_asn1_build_pk_spki_der_write(
+    pqc_asn1_status_t rc = pqc_asn1_spki_build_write(
         buf, sizeof(buf),
         ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
         pk, pk_len,
@@ -233,14 +239,18 @@ All functions return `pqc_asn1_status_t`. `PQC_ASN1_OK` (0) indicates success; a
 
 | Function | Description |
 |----------|-------------|
-| `pqc_asn1_spki_der_size()` | Compute SPKI DER size |
-| `pqc_asn1_build_pk_spki_der_write()` | Write SPKI DER into buffer |
-| `pqc_asn1_build_pk_spki_der()` | Build SPKI DER (allocating) |
-| `pqc_asn1_pkcs8_der_size()` | Compute PKCS#8 DER size |
-| `pqc_asn1_build_sk_pkcs8_der_write()` | Write PKCS#8 DER into buffer |
-| `pqc_asn1_build_sk_pkcs8_der()` | Build PKCS#8 DER (allocating) |
-| `pqc_asn1_parse_pk_spki_der()` | Parse SPKI DER (zero-copy) |
-| `pqc_asn1_parse_sk_pkcs8_der()` | Parse PKCS#8 DER (zero-copy) |
+| `pqc_asn1_spki_size()` | Compute SPKI DER size |
+| `pqc_asn1_spki_size_ex()` | Compute SPKI DER size with optional AlgorithmIdentifier params |
+| `pqc_asn1_spki_build_write()` | Write SPKI DER into buffer |
+| `pqc_asn1_spki_build_write_ex()` | Write SPKI DER into buffer with optional params |
+| `pqc_asn1_spki_build()` | Build SPKI DER (allocating) |
+| `pqc_asn1_pkcs8_size()` | Compute PKCS#8 DER size |
+| `pqc_asn1_pkcs8_size_ex()` | Compute PKCS#8 DER size with optional params and publicKey field |
+| `pqc_asn1_pkcs8_build_write()` | Write PKCS#8 DER into buffer |
+| `pqc_asn1_pkcs8_build_write_ex()` | Write PKCS#8 DER into buffer with optional params and publicKey field |
+| `pqc_asn1_pkcs8_build()` | Build PKCS#8 DER (allocating) |
+| `pqc_asn1_spki_parse()` | Parse SPKI DER, capturing optional AlgorithmIdentifier params (zero-copy) |
+| `pqc_asn1_pkcs8_parse()` | Parse PKCS#8 DER, capturing optional params and publicKey field (zero-copy) |
 
 ### Base64 functions
 
@@ -291,8 +301,8 @@ All functions return `pqc_asn1_status_t`. `PQC_ASN1_OK` (0) indicates success; a
 
 ```
 SEQUENCE {
-  SEQUENCE { OID }           -- AlgorithmIdentifier (OID only, per RFC 9629)
-  BIT STRING { 0x00, pk }   -- public key bytes, 0 unused bits
+  SEQUENCE { OID [params] }  -- AlgorithmIdentifier (params optional; OID-only per RFC 9629)
+  BIT STRING { 0x00, pk }    -- public key bytes, 0 unused bits
 }
 ```
 
@@ -300,9 +310,10 @@ SEQUENCE {
 
 ```
 SEQUENCE {
-  INTEGER 0                  -- version (v1)
-  SEQUENCE { OID }           -- AlgorithmIdentifier
-  OCTET STRING { sk }       -- private key bytes
+  INTEGER 0                          -- version (v1)
+  SEQUENCE { OID [params] }          -- AlgorithmIdentifier
+  OCTET STRING { sk }                -- private key bytes
+  [1] IMPLICIT BIT STRING { pub }    -- optional publicKey (RFC 5958 / RFC 9629)
 }
 ```
 
@@ -337,7 +348,7 @@ Internal constants use `enum` where the value fits in `int` (e.g., `PQC_B64_INV 
 | ITU-T X.690 | DER encoding rules (canonical form, definite length only) |
 | RFC 5280 | SubjectPublicKeyInfo structure |
 | RFC 5958 | OneAsymmetricKey / PKCS#8 structure |
-| RFC 9629 | PQC AlgorithmIdentifier (OID only, no parameters) |
+| RFC 9629 | PQC AlgorithmIdentifier; optional publicKey [1] field in OneAsymmetricKey |
 | RFC 7468 | PEM encoding (boundary lines at line start, label validation) |
 | RFC 4648 | Base64 encoding (strict padding, standard alphabet) |
 
@@ -380,13 +391,20 @@ ctest --test-dir build           # CMake
 
 ```
 libpqcasn1/
-  include/pqc_asn1.h        -- public header (all API declarations)
-  src/pqc_asn1.c             -- implementation (single file)
-  test/test_pqc_asn1.c       -- test suite (58 tests)
+  include/pqc_asn1.h          -- public header (all API declarations)
+  src/pqc_asn1_internal.h     -- internal header (shared helpers, not installed)
+  src/tlv.c                   -- version, safe arithmetic, DER TLV primitives
+  src/builder.c               -- SPKI / PKCS#8 DER builders
+  src/parser.c                -- SPKI / PKCS#8 DER parsers
+  src/base64.c                -- RFC 4648 Base64 codec
+  src/pem.c                   -- RFC 7468 PEM codec
+  src/pqc_asn1.c              -- generated single-file distribution artifact
+  scripts/concat.sh           -- regenerates src/pqc_asn1.c from the TUs above
+  test/test_pqc_asn1.c        -- test suite
   CMakeLists.txt              -- CMake build system
   Makefile                    -- simple Make alternative
   pqc_asn1.pc.in              -- pkg-config template
-  VERSION                     -- version string (0.1.0)
+  VERSION                     -- version string (0.1.1)
   LICENSE-MIT                 -- MIT license
   LICENSE-APACHE              -- Apache 2.0 license
 ```
