@@ -21,11 +21,11 @@ libpqcasn1 provides exactly this: a minimal, auditable, dependency-free codec fo
 - **Dual API pattern** -- every operation has both an allocating variant and a write-into-buffer variant
 - **Configurable allocator** -- override `PQC_ASN1_MALLOC`/`PQC_ASN1_FREE` for custom memory management (e.g. Ruby's `ruby_xmalloc`/`ruby_xfree`)
 - **Secure memory handling** -- secret key buffers are securely zeroed on error and deallocation using platform-optimized primitives
-- **Flexible AlgorithmIdentifier handling** -- parsers capture optional parameters rather than rejecting them; `_ex` builder variants accept optional parameter blobs for non-RFC-9629 algorithms
+- **Flexible AlgorithmIdentifier handling** -- parsers capture optional parameters by default; `PQC_PARSE_STRICT_ALG_ID` flag rejects them for strict RFC 9629 compliance; `_ex` builder variants accept optional parameter blobs for non-RFC-9629 algorithms
 - **Optional PKCS#8 publicKey field** -- RFC 5958 `publicKey [1] IMPLICIT` field supported in both builder and parser
 - **Strict validation** -- DER canonical form enforcement, RFC 7468 PEM boundary rules, RFC 4648 base64 padding strictness
 - **Overflow-safe arithmetic** -- all size computations use checked addition to prevent integer overflow
-- **Comprehensive error codes** -- 18 distinct status codes for precise error diagnosis
+- **Comprehensive error codes** -- 19 distinct status codes for precise error diagnosis
 - **Cross-platform** -- builds and tests on Linux (GCC, Clang), macOS (AppleClang), and Windows (MSVC)
 
 ## Quick start
@@ -162,14 +162,12 @@ void parse_public_key(const uint8_t *der, size_t der_len) {
     const uint8_t *oid, *pk, *alg_params;
     size_t oid_len, pk_len, alg_params_len;
 
-    const uint8_t *alg_params;
-    size_t alg_params_len;
-
     pqc_asn1_status_t rc = pqc_asn1_spki_parse(
         der, der_len,
         &oid, &oid_len,             /* points into der -- no allocation */
         &alg_params, &alg_params_len, /* NULL/0 if no AlgorithmIdentifier params */
-        &pk, &pk_len);              /* points into der -- no allocation */
+        &pk, &pk_len,               /* points into der -- no allocation */
+        0);                          /* flags: 0 = permissive */
 
     if (rc == PQC_ASN1_OK) {
         /* oid/oid_len is the full OID TLV */
@@ -234,6 +232,7 @@ All functions return `pqc_asn1_status_t`. `PQC_ASN1_OK` (0) indicates success; a
 | `PQC_ASN1_ERR_LABEL_TOO_LONG` | -15 | PEM label exceeds limit |
 | `PQC_ASN1_ERR_DER_PARSE` | -16 | Generic DER parse error |
 | `PQC_ASN1_ERR_NULL_PARAM` | -17 | Required pointer is NULL |
+| `PQC_ASN1_ERR_PEM_MALFORMED` | -18 | PEM boundary line has trailing junk |
 
 ### DER structure functions
 
@@ -249,8 +248,8 @@ All functions return `pqc_asn1_status_t`. `PQC_ASN1_OK` (0) indicates success; a
 | `pqc_asn1_pkcs8_build_write()` | Write PKCS#8 DER into buffer |
 | `pqc_asn1_pkcs8_build_write_ex()` | Write PKCS#8 DER into buffer with optional params and publicKey field |
 | `pqc_asn1_pkcs8_build()` | Build PKCS#8 DER (allocating) |
-| `pqc_asn1_spki_parse()` | Parse SPKI DER, capturing optional AlgorithmIdentifier params (zero-copy) |
-| `pqc_asn1_pkcs8_parse()` | Parse PKCS#8 DER, capturing optional params and publicKey field (zero-copy) |
+| `pqc_asn1_spki_parse()` | Parse SPKI DER with flags-controlled strictness (zero-copy) |
+| `pqc_asn1_pkcs8_parse()` | Parse PKCS#8 DER with flags-controlled strictness (zero-copy) |
 
 ### Base64 functions
 
@@ -354,7 +353,7 @@ Internal constants use `enum` where the value fits in `int` (e.g., `PQC_B64_INV 
 
 ## Testing
 
-The library includes a comprehensive test suite (58 tests) covering:
+The library includes a comprehensive test suite (59 tests) covering:
 
 - DER length encoding/decoding (short, 2-byte, 3-byte forms, non-canonical rejection)
 - DER TLV read/write roundtrips
@@ -404,7 +403,7 @@ libpqcasn1/
   CMakeLists.txt              -- CMake build system
   Makefile                    -- simple Make alternative
   pqc_asn1.pc.in              -- pkg-config template
-  VERSION                     -- version string (0.1.1)
+  VERSION                     -- version string (0.1.2)
   LICENSE-MIT                 -- MIT license
   LICENSE-APACHE              -- Apache 2.0 license
 ```

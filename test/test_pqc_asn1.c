@@ -69,7 +69,7 @@ static void test_version(void)
     CHECK(strcmp(v, PQC_ASN1_VERSION_STRING) == 0);
     CHECK(PQC_ASN1_VERSION_MAJOR == 0);
     CHECK(PQC_ASN1_VERSION_MINOR == 1);
-    CHECK(PQC_ASN1_VERSION_PATCH == 1);
+    CHECK(PQC_ASN1_VERSION_PATCH == 2);
 }
 
 /* ------------------------------------------------------------------ */
@@ -310,12 +310,14 @@ static void test_null_params(void)
 
     /* parse_pk_spki_der: null params */
     CHECK(pqc_asn1_spki_parse(NULL, 0, NULL, NULL,
-                                       NULL, NULL, NULL, NULL) == PQC_ASN1_ERR_NULL_PARAM);
+                                       NULL, NULL, NULL, NULL,
+                                       0) == PQC_ASN1_ERR_NULL_PARAM);
 
     /* parse_sk_pkcs8_der: null params */
     CHECK(pqc_asn1_pkcs8_parse(NULL, 0, NULL, NULL,
                                         NULL, NULL, NULL, NULL,
-                                        NULL, NULL) == PQC_ASN1_ERR_NULL_PARAM);
+                                        NULL, NULL,
+                                        0) == PQC_ASN1_ERR_NULL_PARAM);
 
     /* base64_encode_write: null out */
     CHECK(pqc_asn1_base64_encode_write((const uint8_t *)"x", 1,
@@ -725,7 +727,8 @@ static void test_spki_roundtrip(void)
     CHECK_RC(pqc_asn1_spki_parse(der, written,
                                           &out_oid, &out_oid_len,
                                           NULL, NULL,
-                                          &out_pk, &out_pk_len));
+                                          &out_pk, &out_pk_len,
+                                          0));
     CHECK(out_oid_len == sizeof(ML_DSA_65_OID));
     CHECK(memcmp(out_oid, ML_DSA_65_OID, sizeof(ML_DSA_65_OID)) == 0);
     CHECK(out_pk_len == sizeof(pk));
@@ -748,7 +751,8 @@ static void test_spki_allocating(void)
     const uint8_t *out_oid, *out_pk;
     size_t out_oid_len, out_pk_len;
     CHECK_RC(pqc_asn1_spki_parse(der, total, &out_oid, &out_oid_len,
-                                          NULL, NULL, &out_pk, &out_pk_len));
+                                          NULL, NULL, &out_pk, &out_pk_len,
+                                          0));
     CHECK(out_pk_len == sizeof(pk));
     CHECK(memcmp(out_pk, pk, sizeof(pk)) == 0);
 
@@ -809,7 +813,8 @@ static void test_pkcs8_roundtrip(void)
                                            &out_oid, &out_oid_len,
                                            NULL, NULL,
                                            &out_sk, &out_sk_len,
-                                           NULL, NULL));
+                                           NULL, NULL,
+                                           0));
     CHECK(out_oid_len == sizeof(ML_DSA_65_OID));
     CHECK(memcmp(out_oid, ML_DSA_65_OID, sizeof(ML_DSA_65_OID)) == 0);
     CHECK(out_sk_len == sizeof(sk));
@@ -833,7 +838,8 @@ static void test_pkcs8_allocating(void)
     size_t out_oid_len, out_sk_len;
     CHECK_RC(pqc_asn1_pkcs8_parse(der, total, &out_oid, &out_oid_len,
                                            NULL, NULL, &out_sk, &out_sk_len,
-                                           NULL, NULL));
+                                           NULL, NULL,
+                                           0));
     CHECK(out_sk_len == sizeof(sk));
 
     pqc_asn1_secure_zero(der, total);
@@ -1073,7 +1079,8 @@ static void test_parse_spki_trailing_data(void)
     size_t out_oid_len, out_pk_len;
     CHECK(pqc_asn1_spki_parse(bad, total + 1, &out_oid, &out_oid_len,
                                        NULL, NULL,
-                                       &out_pk, &out_pk_len) == PQC_ASN1_ERR_TRAILING_DATA);
+                                       &out_pk, &out_pk_len,
+                                       0) == PQC_ASN1_ERR_TRAILING_DATA);
 
     free(bad);
     PQC_ASN1_FREE(der);
@@ -1102,7 +1109,8 @@ static void test_parse_pkcs8_bad_version(void)
     CHECK(pqc_asn1_pkcs8_parse(der, total, &out_oid, &out_oid_len,
                                         NULL, NULL,
                                         &out_sk, &out_sk_len,
-                                        NULL, NULL) == PQC_ASN1_ERR_VERSION);
+                                        NULL, NULL,
+                                        0) == PQC_ASN1_ERR_VERSION);
 
     PQC_ASN1_FREE(der);
 }
@@ -1255,7 +1263,8 @@ static void test_spki_alg_id_trailing_data(void)
     size_t out_oid_len, out_pk_len;
     CHECK(pqc_asn1_spki_parse(bad, bad_total, &out_oid, &out_oid_len,
                                        NULL, NULL,
-                                       &out_pk, &out_pk_len) == PQC_ASN1_ERR_EXTRA_FIELDS);
+                                       &out_pk, &out_pk_len,
+                                       PQC_PARSE_STRICT_ALG_ID) == PQC_ASN1_ERR_EXTRA_FIELDS);
 
     free(bad);
     PQC_ASN1_FREE(good_der);
@@ -1299,7 +1308,8 @@ static void test_pkcs8_alg_id_trailing_data(void)
     CHECK(pqc_asn1_pkcs8_parse(bad, bad_total, &out_oid, &out_oid_len,
                                         NULL, NULL,
                                         &out_sk, &out_sk_len,
-                                        NULL, NULL) == PQC_ASN1_ERR_EXTRA_FIELDS);
+                                        NULL, NULL,
+                                        PQC_PARSE_STRICT_ALG_ID) == PQC_ASN1_ERR_EXTRA_FIELDS);
 
     free(bad);
     PQC_ASN1_FREE(good_der);

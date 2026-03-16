@@ -37,9 +37,9 @@ extern "C" {
 
 #define PQC_ASN1_VERSION_MAJOR 0
 #define PQC_ASN1_VERSION_MINOR 1
-#define PQC_ASN1_VERSION_PATCH 1
+#define PQC_ASN1_VERSION_PATCH 2
 
-#define PQC_ASN1_VERSION_STRING "0.1.1"
+#define PQC_ASN1_VERSION_STRING "0.1.2"
 
 /* Runtime version query (returns PQC_ASN1_VERSION_STRING). */
 const char *pqc_asn1_version(void);
@@ -296,6 +296,20 @@ pqc_asn1_status_t pqc_asn1_pkcs8_build(
     uint8_t **out_buf, size_t *out_total);
 
 /* ------------------------------------------------------------------ */
+/* Parse flags                                                         */
+/* ------------------------------------------------------------------ */
+
+/* Flags controlling the strictness of pqc_asn1_spki_parse and
+ * pqc_asn1_pkcs8_parse.  Pass 0 for default (permissive) behaviour.
+ * Combine with bitwise OR for multiple constraints. */
+
+/* Reject any trailing bytes inside the AlgorithmIdentifier SEQUENCE
+ * (i.e. reject algorithm parameters).  RFC 9629 mandates absent params
+ * for ML-DSA, ML-KEM, and SLH-DSA; use this flag to enforce that rule.
+ * Without this flag the parser accepts and optionally captures params. */
+#define PQC_PARSE_STRICT_ALG_ID  0x01u
+
+/* ------------------------------------------------------------------ */
 /* DER structure parsers                                               */
 /* ------------------------------------------------------------------ */
 
@@ -306,10 +320,12 @@ pqc_asn1_status_t pqc_asn1_pkcs8_build(
  *   - BIT STRING unused-bits byte must be 0x00
  *   - PKCS#8 version must be INTEGER 0
  *
- * AlgorithmIdentifier parameters (if any) are captured and returned via
- * alg_params/alg_params_len rather than rejected.  Pass NULL/NULL for
- * either pointer to ignore parameters.  RFC 9629 callers that require
- * no-params can check (alg_params_len == 0) after parsing.
+ * flags: bitwise OR of PQC_PARSE_* constants, or 0 for defaults.
+ *   PQC_PARSE_STRICT_ALG_ID — reject AlgorithmIdentifier parameters.
+ *   Without this flag, parameters are accepted and optionally captured.
+ *
+ * alg_params/alg_params_len: AlgorithmIdentifier params bytes (0 len if
+ *   absent).  Pass NULL/NULL to discard.  Ignored when STRICT_ALG_ID set.
  *
  * PKCS#8: the optional OneAsymmetricKey publicKey [1] field is returned
  * via pub_key/pub_key_len when present; pass NULL/NULL to ignore it. */
@@ -319,29 +335,33 @@ pqc_asn1_status_t pqc_asn1_pkcs8_build(
  * Output pointers reference into the input buffer (no allocation).
  * oid_der/oid_der_len: the OID TLV from within AlgorithmIdentifier.
  * alg_params/alg_params_len: AlgorithmIdentifier params bytes (0 len if absent).
- *   Pass NULL/NULL to discard.
- * pk_bytes/pk_len: public key bytes (after BIT STRING unused-bits byte). */
+ *   Pass NULL/NULL to discard.  Not written when PQC_PARSE_STRICT_ALG_ID set.
+ * pk_bytes/pk_len: public key bytes (after BIT STRING unused-bits byte).
+ * flags: 0 or bitwise OR of PQC_PARSE_* constants. */
 pqc_asn1_status_t pqc_asn1_spki_parse(
     const uint8_t *der, size_t der_len,
     const uint8_t **oid_der, size_t *oid_der_len,
     const uint8_t **alg_params, size_t *alg_params_len,
-    const uint8_t **pk_bytes, size_t *pk_len);
+    const uint8_t **pk_bytes, size_t *pk_len,
+    uint32_t flags);
 
 /* Parse PKCS#8 OneAsymmetricKey DER.
  * Returns PQC_ASN1_OK on success, or a negative PQC_ASN1_ERR_* code.
  * Output pointers reference into the input buffer (no allocation).
  * oid_der/oid_der_len: the OID TLV from within AlgorithmIdentifier.
  * alg_params/alg_params_len: AlgorithmIdentifier params bytes (0 len if absent).
- *   Pass NULL/NULL to discard.
+ *   Pass NULL/NULL to discard.  Not written when PQC_PARSE_STRICT_ALG_ID set.
  * sk_bytes/sk_len: secret key bytes (OCTET STRING content).
  * pub_key/pub_key_len: optional publicKey [1] BIT STRING bytes (0 len if absent).
- *   Pass NULL/NULL to discard. */
+ *   Pass NULL/NULL to discard.
+ * flags: 0 or bitwise OR of PQC_PARSE_* constants. */
 pqc_asn1_status_t pqc_asn1_pkcs8_parse(
     const uint8_t *der, size_t der_len,
     const uint8_t **oid_der, size_t *oid_der_len,
     const uint8_t **alg_params, size_t *alg_params_len,
     const uint8_t **sk_bytes, size_t *sk_len,
-    const uint8_t **pub_key, size_t *pub_key_len);
+    const uint8_t **pub_key, size_t *pub_key_len,
+    uint32_t flags);
 
 /* ------------------------------------------------------------------ */
 /* Base64 codec                                                        */

@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-03-17
+
+### Changed
+
+#### Parser strictness control (breaking)
+- `pqc_asn1_spki_parse` and `pqc_asn1_pkcs8_parse` now accept a `uint32_t flags`
+  parameter as the last argument
+- Strict AlgorithmIdentifier validation is now controlled by the
+  `PQC_PARSE_STRICT_ALG_ID` flag instead of passing NULL for the `alg_params`
+  output pointer
+- Without the flag, AlgorithmIdentifier parameters are silently accepted
+  (captured if out-pointers are non-NULL, discarded otherwise)
+- With `PQC_PARSE_STRICT_ALG_ID`, any trailing bytes in the AlgorithmIdentifier
+  SEQUENCE are rejected as `PQC_ASN1_ERR_EXTRA_FIELDS` (RFC 9629 strict mode)
+
+### Added
+
+- `PQC_PARSE_STRICT_ALG_ID` parse flag constant (`0x01u`) for opting into strict
+  AlgorithmIdentifier validation
+- `PQC_ASN1_ERR_PEM_MALFORMED` error code (`-18`) for PEM boundary lines with
+  trailing junk
+
+---
+
 ## [0.1.1] - 2026-03-16
 
 ### Changed

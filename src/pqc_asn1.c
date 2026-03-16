@@ -12,7 +12,7 @@
  *   src/base64.c   — RFC 4648 Base64 encode/decode
  *   src/pem.c      — RFC 7468 PEM encode/decode
  *
- * Version: 0.1.0
+ * Version: 0.1.2
  *
  * Standalone C library — no external dependencies beyond the C standard library.
  *
@@ -725,11 +725,14 @@ pqc_asn1_status_t pqc_asn1_pkcs8_build(
  * On success, *oid_out points to the OID TLV and *params_out to the
  * optional parameters (NULL/0 if absent).  Advances *pos past the
  * AlgorithmIdentifier SEQUENCE.
- * Pass NULL for params_out/params_len_out to discard parameters. */
+ * Pass NULL for params_out/params_len_out to discard parameters.
+ * When (flags & PQC_PARSE_STRICT_ALG_ID), any trailing bytes in the
+ * AlgorithmIdentifier are rejected as PQC_ASN1_ERR_EXTRA_FIELDS. */
 static pqc_asn1_status_t parse_algorithm_identifier(
     const uint8_t *seq, size_t seq_len, size_t *pos,
     const uint8_t **oid_out, size_t *oid_len_out,
-    const uint8_t **params_out, size_t *params_len_out)
+    const uint8_t **params_out, size_t *params_len_out,
+    uint32_t flags)
 {
     const uint8_t *alg_content;
     size_t alg_len;
@@ -750,15 +753,15 @@ static pqc_asn1_status_t parse_algorithm_identifier(
     *oid_len_out = oid_tlv_len;
 
     /* Capture optional AlgorithmIdentifier parameters (bytes after OID).
-     * If params_out is NULL the caller does not accept parameters; any
-     * trailing bytes in the AlgorithmIdentifier are rejected as extra
-     * fields (strict RFC 9629 mode). */
+     * PQC_PARSE_STRICT_ALG_ID: reject any trailing bytes (RFC 9629 strict).
+     * Without that flag: capture if out-pointers are non-NULL, otherwise discard. */
     if (alg_pos < alg_len) {
+        if (flags & PQC_PARSE_STRICT_ALG_ID) {
+            return PQC_ASN1_ERR_EXTRA_FIELDS;
+        }
         if (params_out && params_len_out) {
             *params_out = alg_content + alg_pos;
             *params_len_out = alg_len - alg_pos;
-        } else {
-            return PQC_ASN1_ERR_EXTRA_FIELDS;
         }
     } else {
         if (params_out) *params_out = NULL;
@@ -776,7 +779,8 @@ pqc_asn1_status_t pqc_asn1_spki_parse(
     const uint8_t *der, size_t der_len,
     const uint8_t **oid_der, size_t *oid_der_len,
     const uint8_t **alg_params, size_t *alg_params_len,
-    const uint8_t **pk_bytes, size_t *pk_len)
+    const uint8_t **pk_bytes, size_t *pk_len,
+    uint32_t flags)
 {
     if (!der || !oid_der || !oid_der_len || !pk_bytes || !pk_len)
         return PQC_ASN1_ERR_NULL_PARAM;
@@ -797,7 +801,7 @@ pqc_asn1_status_t pqc_asn1_spki_parse(
     /* AlgorithmIdentifier SEQUENCE { OID [params] } */
     pqc_asn1_status_t alg_rc = parse_algorithm_identifier(
         seq_content, seq_len, &inner_pos, oid_der, oid_der_len,
-        alg_params, alg_params_len);
+        alg_params, alg_params_len, flags);
     if (alg_rc != PQC_ASN1_OK) return alg_rc;
 
     /* BIT STRING */
@@ -825,7 +829,8 @@ pqc_asn1_status_t pqc_asn1_pkcs8_parse(
     const uint8_t **oid_der, size_t *oid_der_len,
     const uint8_t **alg_params, size_t *alg_params_len,
     const uint8_t **sk_bytes, size_t *sk_len,
-    const uint8_t **pub_key, size_t *pub_key_len)
+    const uint8_t **pub_key, size_t *pub_key_len,
+    uint32_t flags)
 {
     if (!der || !oid_der || !oid_der_len || !sk_bytes || !sk_len)
         return PQC_ASN1_ERR_NULL_PARAM;
@@ -855,7 +860,7 @@ pqc_asn1_status_t pqc_asn1_pkcs8_parse(
     /* AlgorithmIdentifier SEQUENCE { OID [params] } */
     pqc_asn1_status_t alg_rc = parse_algorithm_identifier(
         seq_content, seq_len, &inner_pos, oid_der, oid_der_len,
-        alg_params, alg_params_len);
+        alg_params, alg_params_len, flags);
     if (alg_rc != PQC_ASN1_OK) return alg_rc;
 
     /* OCTET STRING (secret key) */
