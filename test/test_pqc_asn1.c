@@ -69,7 +69,7 @@ static void test_version(void)
     CHECK(strcmp(v, PQC_ASN1_VERSION_STRING) == 0);
     CHECK(PQC_ASN1_VERSION_MAJOR == 0);
     CHECK(PQC_ASN1_VERSION_MINOR == 1);
-    CHECK(PQC_ASN1_VERSION_PATCH == 0);
+    CHECK(PQC_ASN1_VERSION_PATCH == 1);
 }
 
 /* ------------------------------------------------------------------ */
@@ -290,30 +290,31 @@ static void test_null_params(void)
 
     /* build_pk_spki_der: null out_buf */
     uint8_t pk[4] = {0};
-    CHECK(pqc_asn1_build_pk_spki_der(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
+    CHECK(pqc_asn1_spki_build(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
                                        pk, sizeof(pk),
                                        NULL, NULL) == PQC_ASN1_ERR_NULL_PARAM);
 
     /* build_pk_spki_der: null pk_bytes */
     uint8_t *der = NULL;
     size_t total = 0;
-    CHECK(pqc_asn1_build_pk_spki_der(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
+    CHECK(pqc_asn1_spki_build(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
                                        NULL, 4,
                                        &der, &total) == PQC_ASN1_ERR_NULL_PARAM);
     CHECK(der == NULL);
     CHECK(total == 0);
 
     /* build_sk_pkcs8_der: null out_buf */
-    CHECK(pqc_asn1_build_sk_pkcs8_der(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
+    CHECK(pqc_asn1_pkcs8_build(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
                                         pk, sizeof(pk),
                                         NULL, NULL) == PQC_ASN1_ERR_NULL_PARAM);
 
     /* parse_pk_spki_der: null params */
-    CHECK(pqc_asn1_parse_pk_spki_der(NULL, 0, NULL, NULL,
-                                       NULL, NULL) == PQC_ASN1_ERR_NULL_PARAM);
+    CHECK(pqc_asn1_spki_parse(NULL, 0, NULL, NULL,
+                                       NULL, NULL, NULL, NULL) == PQC_ASN1_ERR_NULL_PARAM);
 
     /* parse_sk_pkcs8_der: null params */
-    CHECK(pqc_asn1_parse_sk_pkcs8_der(NULL, 0, NULL, NULL,
+    CHECK(pqc_asn1_pkcs8_parse(NULL, 0, NULL, NULL,
+                                        NULL, NULL, NULL, NULL,
                                         NULL, NULL) == PQC_ASN1_ERR_NULL_PARAM);
 
     /* base64_encode_write: null out */
@@ -383,7 +384,7 @@ static void test_out_params_zeroed_on_error(void)
     uint8_t bad_oid[] = {0x30, 0x03, 0x01, 0x01, 0x00};
     buf = (uint8_t *)0xDEAD;
     total = 999;
-    rc = pqc_asn1_build_pk_spki_der(bad_oid, sizeof(bad_oid),
+    rc = pqc_asn1_spki_build(bad_oid, sizeof(bad_oid),
                                       (const uint8_t *)"pk", 2,
                                       &buf, &total);
     CHECK(rc == PQC_ASN1_ERR_INVALID_OID);
@@ -393,7 +394,7 @@ static void test_out_params_zeroed_on_error(void)
     /* build_sk_pkcs8_der: bad OID should zero out-params */
     buf = (uint8_t *)0xDEAD;
     total = 999;
-    rc = pqc_asn1_build_sk_pkcs8_der(bad_oid, sizeof(bad_oid),
+    rc = pqc_asn1_pkcs8_build(bad_oid, sizeof(bad_oid),
                                        (const uint8_t *)"sk", 2,
                                        &buf, &total);
     CHECK(rc == PQC_ASN1_ERR_INVALID_OID);
@@ -708,21 +709,22 @@ static void test_spki_roundtrip(void)
     memset(pk, 0xAB, sizeof(pk));
 
     size_t der_size;
-    CHECK_RC_BAIL(pqc_asn1_spki_der_size(ML_DSA_65_OID, sizeof(ML_DSA_65_OID), sizeof(pk), &der_size));
+    CHECK_RC_BAIL(pqc_asn1_spki_size(ML_DSA_65_OID, sizeof(ML_DSA_65_OID), sizeof(pk), &der_size));
     CHECK_BAIL(der_size > 0);
 
     uint8_t *der = (uint8_t *)malloc(der_size);
     CHECK_BAIL(der != NULL);
     size_t written;
-    CHECK_RC_BAIL(pqc_asn1_build_pk_spki_der_write(der, der_size,
+    CHECK_RC_BAIL(pqc_asn1_spki_build_write(der, der_size,
                                                      ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
                                                      pk, sizeof(pk), &written));
     CHECK(written == der_size);
 
     const uint8_t *out_oid, *out_pk;
     size_t out_oid_len, out_pk_len;
-    CHECK_RC(pqc_asn1_parse_pk_spki_der(der, written,
+    CHECK_RC(pqc_asn1_spki_parse(der, written,
                                           &out_oid, &out_oid_len,
+                                          NULL, NULL,
                                           &out_pk, &out_pk_len));
     CHECK(out_oid_len == sizeof(ML_DSA_65_OID));
     CHECK(memcmp(out_oid, ML_DSA_65_OID, sizeof(ML_DSA_65_OID)) == 0);
@@ -739,14 +741,14 @@ static void test_spki_allocating(void)
 
     uint8_t *der = NULL;
     size_t total;
-    CHECK_RC_BAIL(pqc_asn1_build_pk_spki_der(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
+    CHECK_RC_BAIL(pqc_asn1_spki_build(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
                                                pk, sizeof(pk), &der, &total));
     CHECK(total > 0);
 
     const uint8_t *out_oid, *out_pk;
     size_t out_oid_len, out_pk_len;
-    CHECK_RC(pqc_asn1_parse_pk_spki_der(der, total, &out_oid, &out_oid_len,
-                                          &out_pk, &out_pk_len));
+    CHECK_RC(pqc_asn1_spki_parse(der, total, &out_oid, &out_oid_len,
+                                          NULL, NULL, &out_pk, &out_pk_len));
     CHECK(out_pk_len == sizeof(pk));
     CHECK(memcmp(out_pk, pk, sizeof(pk)) == 0);
 
@@ -757,13 +759,13 @@ static void test_spki_invalid_oid(void)
 {
     uint8_t bad_oid[] = {0x30, 0x03, 0x01, 0x01, 0x00};
     size_t bad_size;
-    CHECK(pqc_asn1_spki_der_size(bad_oid, sizeof(bad_oid), 32, &bad_size) == PQC_ASN1_ERR_INVALID_OID);
+    CHECK(pqc_asn1_spki_size(bad_oid, sizeof(bad_oid), 32, &bad_size) == PQC_ASN1_ERR_INVALID_OID);
 
     /* Allocating variant returns specific error. */
     uint8_t pk[32];
     uint8_t *der = NULL;
     size_t total;
-    CHECK(pqc_asn1_build_pk_spki_der(bad_oid, sizeof(bad_oid),
+    CHECK(pqc_asn1_spki_build(bad_oid, sizeof(bad_oid),
                                        pk, sizeof(pk), &der, &total) == PQC_ASN1_ERR_INVALID_OID);
 }
 
@@ -773,7 +775,7 @@ static void test_spki_write_buffer_too_small(void)
     memset(pk, 0xAB, sizeof(pk));
     uint8_t tiny[4];
     size_t written;
-    pqc_asn1_status_t rc = pqc_asn1_build_pk_spki_der_write(
+    pqc_asn1_status_t rc = pqc_asn1_spki_build_write(
         tiny, sizeof(tiny),
         ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
         pk, sizeof(pk), &written);
@@ -790,22 +792,24 @@ static void test_pkcs8_roundtrip(void)
     memset(sk, 0x99, sizeof(sk));
 
     size_t der_size;
-    CHECK_RC_BAIL(pqc_asn1_pkcs8_der_size(ML_DSA_65_OID, sizeof(ML_DSA_65_OID), sizeof(sk), &der_size));
+    CHECK_RC_BAIL(pqc_asn1_pkcs8_size(ML_DSA_65_OID, sizeof(ML_DSA_65_OID), sizeof(sk), &der_size));
     CHECK_BAIL(der_size > 0);
 
     uint8_t *der = (uint8_t *)malloc(der_size);
     CHECK_BAIL(der != NULL);
     size_t written;
-    CHECK_RC_BAIL(pqc_asn1_build_sk_pkcs8_der_write(der, der_size,
+    CHECK_RC_BAIL(pqc_asn1_pkcs8_build_write(der, der_size,
                                                       ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
                                                       sk, sizeof(sk), &written));
     CHECK(written == der_size);
 
     const uint8_t *out_oid, *out_sk;
     size_t out_oid_len, out_sk_len;
-    CHECK_RC(pqc_asn1_parse_sk_pkcs8_der(der, written,
+    CHECK_RC(pqc_asn1_pkcs8_parse(der, written,
                                            &out_oid, &out_oid_len,
-                                           &out_sk, &out_sk_len));
+                                           NULL, NULL,
+                                           &out_sk, &out_sk_len,
+                                           NULL, NULL));
     CHECK(out_oid_len == sizeof(ML_DSA_65_OID));
     CHECK(memcmp(out_oid, ML_DSA_65_OID, sizeof(ML_DSA_65_OID)) == 0);
     CHECK(out_sk_len == sizeof(sk));
@@ -822,13 +826,14 @@ static void test_pkcs8_allocating(void)
 
     uint8_t *der = NULL;
     size_t total;
-    CHECK_RC_BAIL(pqc_asn1_build_sk_pkcs8_der(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
+    CHECK_RC_BAIL(pqc_asn1_pkcs8_build(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
                                                 sk, sizeof(sk), &der, &total));
 
     const uint8_t *out_oid, *out_sk;
     size_t out_oid_len, out_sk_len;
-    CHECK_RC(pqc_asn1_parse_sk_pkcs8_der(der, total, &out_oid, &out_oid_len,
-                                           &out_sk, &out_sk_len));
+    CHECK_RC(pqc_asn1_pkcs8_parse(der, total, &out_oid, &out_oid_len,
+                                           NULL, NULL, &out_sk, &out_sk_len,
+                                           NULL, NULL));
     CHECK(out_sk_len == sizeof(sk));
 
     pqc_asn1_secure_zero(der, total);
@@ -841,7 +846,7 @@ static void test_pkcs8_write_buffer_too_small(void)
     memset(sk, 0x99, sizeof(sk));
     uint8_t tiny[4];
     size_t written;
-    pqc_asn1_status_t rc = pqc_asn1_build_sk_pkcs8_der_write(
+    pqc_asn1_status_t rc = pqc_asn1_pkcs8_build_write(
         tiny, sizeof(tiny),
         ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
         sk, sizeof(sk), &written);
@@ -860,7 +865,7 @@ static void test_pem_roundtrip(void)
     /* Build SPKI DER first */
     uint8_t *der = NULL;
     size_t der_total;
-    CHECK_RC_BAIL(pqc_asn1_build_pk_spki_der(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
+    CHECK_RC_BAIL(pqc_asn1_spki_build(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
                                                pk, sizeof(pk), &der, &der_total));
 
     /* Encode to PEM using non-allocating API */
@@ -901,7 +906,7 @@ static void test_pem_encode_allocating(void)
 
     uint8_t *der = NULL;
     size_t der_total;
-    CHECK_RC_BAIL(pqc_asn1_build_pk_spki_der(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
+    CHECK_RC_BAIL(pqc_asn1_spki_build(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
                                                pk, sizeof(pk), &der, &der_total));
 
     /* Use the allocating PEM encode wrapper */
@@ -1056,7 +1061,7 @@ static void test_parse_spki_trailing_data(void)
     memset(pk, 0xAB, sizeof(pk));
     uint8_t *der = NULL;
     size_t total;
-    CHECK_RC_BAIL(pqc_asn1_build_pk_spki_der(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
+    CHECK_RC_BAIL(pqc_asn1_spki_build(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
                                                pk, sizeof(pk), &der, &total));
 
     uint8_t *bad = (uint8_t *)malloc(total + 1);
@@ -1066,7 +1071,8 @@ static void test_parse_spki_trailing_data(void)
 
     const uint8_t *out_oid, *out_pk;
     size_t out_oid_len, out_pk_len;
-    CHECK(pqc_asn1_parse_pk_spki_der(bad, total + 1, &out_oid, &out_oid_len,
+    CHECK(pqc_asn1_spki_parse(bad, total + 1, &out_oid, &out_oid_len,
+                                       NULL, NULL,
                                        &out_pk, &out_pk_len) == PQC_ASN1_ERR_TRAILING_DATA);
 
     free(bad);
@@ -1079,7 +1085,7 @@ static void test_parse_pkcs8_bad_version(void)
     memset(sk, 0x11, sizeof(sk));
     uint8_t *der = NULL;
     size_t total;
-    CHECK_RC_BAIL(pqc_asn1_build_sk_pkcs8_der(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
+    CHECK_RC_BAIL(pqc_asn1_pkcs8_build(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
                                                 sk, sizeof(sk), &der, &total));
 
     /* Find version INTEGER 0 (bytes 02 01 00) and change 00 to 01 */
@@ -1093,8 +1099,10 @@ static void test_parse_pkcs8_bad_version(void)
 
     const uint8_t *out_oid, *out_sk;
     size_t out_oid_len, out_sk_len;
-    CHECK(pqc_asn1_parse_sk_pkcs8_der(der, total, &out_oid, &out_oid_len,
-                                        &out_sk, &out_sk_len) == PQC_ASN1_ERR_VERSION);
+    CHECK(pqc_asn1_pkcs8_parse(der, total, &out_oid, &out_oid_len,
+                                        NULL, NULL,
+                                        &out_sk, &out_sk_len,
+                                        NULL, NULL) == PQC_ASN1_ERR_VERSION);
 
     PQC_ASN1_FREE(der);
 }
@@ -1183,13 +1191,13 @@ static void test_oid_zero_length_rejected(void)
     /* {0x06, 0x00} is a zero-length OID — invalid per X.690. */
     uint8_t zero_oid[] = {0x06, 0x00};
     size_t sz;
-    CHECK(pqc_asn1_spki_der_size(zero_oid, sizeof(zero_oid), 32, &sz) == PQC_ASN1_ERR_INVALID_OID);
-    CHECK(pqc_asn1_pkcs8_der_size(zero_oid, sizeof(zero_oid), 32, &sz) == PQC_ASN1_ERR_INVALID_OID);
+    CHECK(pqc_asn1_spki_size(zero_oid, sizeof(zero_oid), 32, &sz) == PQC_ASN1_ERR_INVALID_OID);
+    CHECK(pqc_asn1_pkcs8_size(zero_oid, sizeof(zero_oid), 32, &sz) == PQC_ASN1_ERR_INVALID_OID);
 
     uint8_t pk[4] = {0};
     uint8_t *der = NULL;
     size_t total;
-    CHECK(pqc_asn1_build_pk_spki_der(zero_oid, sizeof(zero_oid),
+    CHECK(pqc_asn1_spki_build(zero_oid, sizeof(zero_oid),
                                        pk, sizeof(pk), &der, &total) == PQC_ASN1_ERR_INVALID_OID);
     CHECK(der == NULL);
 }
@@ -1208,7 +1216,7 @@ static void test_spki_alg_id_trailing_data(void)
 
     uint8_t *good_der = NULL;
     size_t good_total;
-    CHECK_RC_BAIL(pqc_asn1_build_pk_spki_der(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
+    CHECK_RC_BAIL(pqc_asn1_spki_build(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
                                                pk, sizeof(pk), &good_der, &good_total));
 
     /* Construct a modified DER: insert NULL (05 00) after OID inside
@@ -1245,7 +1253,8 @@ static void test_spki_alg_id_trailing_data(void)
 
     const uint8_t *out_oid, *out_pk;
     size_t out_oid_len, out_pk_len;
-    CHECK(pqc_asn1_parse_pk_spki_der(bad, bad_total, &out_oid, &out_oid_len,
+    CHECK(pqc_asn1_spki_parse(bad, bad_total, &out_oid, &out_oid_len,
+                                       NULL, NULL,
                                        &out_pk, &out_pk_len) == PQC_ASN1_ERR_EXTRA_FIELDS);
 
     free(bad);
@@ -1260,7 +1269,7 @@ static void test_pkcs8_alg_id_trailing_data(void)
 
     uint8_t *good_der = NULL;
     size_t good_total;
-    CHECK_RC_BAIL(pqc_asn1_build_sk_pkcs8_der(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
+    CHECK_RC_BAIL(pqc_asn1_pkcs8_build(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
                                                 sk, sizeof(sk), &good_der, &good_total));
 
     size_t bad_total = good_total + 2;
@@ -1287,8 +1296,10 @@ static void test_pkcs8_alg_id_trailing_data(void)
 
     const uint8_t *out_oid, *out_sk;
     size_t out_oid_len, out_sk_len;
-    CHECK(pqc_asn1_parse_sk_pkcs8_der(bad, bad_total, &out_oid, &out_oid_len,
-                                        &out_sk, &out_sk_len) == PQC_ASN1_ERR_EXTRA_FIELDS);
+    CHECK(pqc_asn1_pkcs8_parse(bad, bad_total, &out_oid, &out_oid_len,
+                                        NULL, NULL,
+                                        &out_sk, &out_sk_len,
+                                        NULL, NULL) == PQC_ASN1_ERR_EXTRA_FIELDS);
 
     free(bad);
     PQC_ASN1_FREE(good_der);
