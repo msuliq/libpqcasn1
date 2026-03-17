@@ -42,6 +42,12 @@ target_compile_options(pqc_asn1 PRIVATE
   $<$<AND:$<CONFIG:Debug>,$<C_COMPILER_ID:GNU,Clang,AppleClang>>:-O0 -g>
   $<$<AND:$<CONFIG:Debug>,$<C_COMPILER_ID:MSVC>>:/Od /Zi>
 )
+option(PQC_ASN1_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+if(PQC_ASN1_SANITIZE)
+  target_compile_options(pqc_asn1 PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+  target_link_options(pqc_asn1 PRIVATE -fsanitize=address,undefined)
+endif()
+
 set_target_properties(pqc_asn1 PROPERTIES
   VERSION ${PROJECT_VERSION}
   SOVERSION ${PROJECT_VERSION_MAJOR}
@@ -72,5 +78,9 @@ if(PQC_ASN1_BUILD_TESTS)
   enable_testing()
   add_executable(test_pqc_asn1 test/test_pqc_asn1.c)
   target_link_libraries(test_pqc_asn1 PRIVATE pqc_asn1)
+  if(PQC_ASN1_SANITIZE)
+    target_compile_options(test_pqc_asn1 PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
+    target_link_options(test_pqc_asn1 PRIVATE -fsanitize=address,undefined)
+  endif()
   add_test(NAME test_pqc_asn1 COMMAND test_pqc_asn1)
 endif()

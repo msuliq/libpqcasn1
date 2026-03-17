@@ -61,6 +61,8 @@ static const char *find_at_line_start(const char *hay, size_t hay_len,
     while (search_len > 0) {
         const char *candidate = bounded_find(search, search_len, needle, needle_len);
         if (!candidate) return NULL;
+        /* Safe: when candidate != pem_start, candidate > start of search
+         * range (hay >= pem_start), so candidate[-1] is always in bounds. */
         if (candidate == pem_start || candidate[-1] == '\n' || candidate[-1] == '\r')
             return candidate;
         size_t skip = (size_t)(candidate - search) + 1;

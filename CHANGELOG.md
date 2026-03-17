@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-03-17
+
+### Changed
+
+#### Build & CI hardening
+- CI `test` jobs now build with `-Werror` (Make and CMake) to catch new warnings
+- Windows CI job builds with MSVC `/WX` (warnings as errors)
+- Makefile test link step now passes `$(LDFLAGS)` so sanitizer flags propagate
+  correctly
+
+### Added
+
+- `PQC_ASN1_SANITIZE` CMake option for building with AddressSanitizer and
+  UndefinedBehaviorSanitizer (applies to both library and test targets)
+- Dedicated `sanitize` CI job running ASan + UBSan on Linux and macOS (Make and
+  CMake)
+- `fuzz/fuzz_decode.c` — minimal libFuzzer entrypoint targeting `base64_decode`,
+  `base64_decode_into`, `pem_decode_auto`, and `pem_decode_auto_into`
+- `fuzz` CI job that builds and runs the fuzzer for 60 seconds under
+  ASan + UBSan on Linux
+- Documentation: README section on running sanitizers and fuzzers locally
+
+### Fixed
+
+- Documented `pqc_asn1_secure_zero` NULL-pointer contract in public header
+  (`ptr` may be NULL; the call is a no-op regardless of `len`)
+- Added safety comment in `pem.c` `find_at_line_start` explaining why
+  `candidate[-1]` access is in-bounds
+
+---
+
 ## [0.1.2] - 2026-03-17
 
 ### Changed
