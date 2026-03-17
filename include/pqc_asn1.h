@@ -37,9 +37,9 @@ extern "C" {
 
 #define PQC_ASN1_VERSION_MAJOR 0
 #define PQC_ASN1_VERSION_MINOR 1
-#define PQC_ASN1_VERSION_PATCH 2
+#define PQC_ASN1_VERSION_PATCH 3
 
-#define PQC_ASN1_VERSION_STRING "0.1.2"
+#define PQC_ASN1_VERSION_STRING "0.1.3"
 
 /* Runtime version query (returns PQC_ASN1_VERSION_STRING). */
 const char *pqc_asn1_version(void);
@@ -116,7 +116,9 @@ typedef enum {
 /* Securely zero a buffer, preventing the compiler from optimizing
  * away the write.  Uses platform-specific primitives where available
  * (memset_s on Apple/BSD, explicit_bzero on glibc), with a volatile-
- * pointer fallback elsewhere. */
+ * pointer fallback elsewhere.
+ *
+ * ptr may be NULL, in which case the call is a no-op regardless of len. */
 void pqc_asn1_secure_zero(void *ptr, size_t len);
 
 /* ------------------------------------------------------------------ */

@@ -69,7 +69,7 @@ static void test_version(void)
     CHECK(strcmp(v, PQC_ASN1_VERSION_STRING) == 0);
     CHECK(PQC_ASN1_VERSION_MAJOR == 0);
     CHECK(PQC_ASN1_VERSION_MINOR == 1);
-    CHECK(PQC_ASN1_VERSION_PATCH == 2);
+    CHECK(PQC_ASN1_VERSION_PATCH == 3);
 }
 
 /* ------------------------------------------------------------------ */

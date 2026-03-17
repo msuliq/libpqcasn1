@@ -20,9 +20,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build and test (Make)
+      - name: Build and test (Make, -Werror)
         env:
           CC: ${{ matrix.compiler }}
+          CFLAGS: "-O2 -Wall -Wextra -Wshadow -Wpedantic -Werror -std=c11"
         run: |
           make clean
           make test
@@ -31,17 +32,59 @@ jobs:
         env:
           CC: ${{ matrix.compiler }}
         run: |
-          cmake -B build -DCMAKE_C_COMPILER=${{ matrix.compiler }}
+          cmake -B build -DCMAKE_C_COMPILER=${{ matrix.compiler }} -DCMAKE_C_FLAGS="-Werror"
           cmake --build build
           ctest --test-dir build --output-on-failure
+
+  sanitize:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and test with ASan + UBSan (Make)
+        env:
+          CC: clang
+          CFLAGS: "-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -std=c11"
+          LDFLAGS: "-fsanitize=address,undefined"
+        run: |
+          make clean
+          make test
+
+      - name: Build and test with ASan + UBSan (CMake)
+        run: |
+          cmake -B build-san -DCMAKE_C_COMPILER=clang -DPQC_ASN1_SANITIZE=ON
+          cmake --build build-san
+          ctest --test-dir build-san --output-on-failure
 
   test-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build and test (CMake + MSVC)
+      - name: Build and test (CMake + MSVC, /WX)
         run: |
-          cmake -B build
+          cmake -B build -DCMAKE_C_FLAGS="/WX"
           cmake --build build --config Release
           ctest --test-dir build --output-on-failure -C Release
+
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build fuzzer
+        env:
+          CC: clang
+        run: |
+          clang -g -O1 -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer \
+                -Iinclude -Isrc fuzz/fuzz_decode.c src/tlv.c src/builder.c \
+                src/parser.c src/base64.c src/pem.c -o fuzz/fuzz_decode
+
+      - name: Run fuzzer (60 seconds)
+        run: |
+          mkdir -p fuzz/corpus
+          ./fuzz/fuzz_decode -max_total_time=60 -max_len=4096 fuzz/corpus

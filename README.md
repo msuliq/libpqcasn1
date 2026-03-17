@@ -378,6 +378,20 @@ make test                        # Make
 ctest --test-dir build           # CMake
 ```
 
+CI builds with **`-Werror`** (both Make and CMake, including MSVC `/WX`), runs a dedicated **sanitize** job (AddressSanitizer + UndefinedBehaviorSanitizer) on Linux and macOS, and runs a **fuzz** job (libFuzzer + ASan + UBSan, 60 s) against the base64 and PEM decoders. To run sanitizers locally:
+
+```sh
+# Make
+make clean
+make test CFLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -std=c11" \
+          LDFLAGS="-fsanitize=address,undefined"
+
+# CMake
+cmake -B build-san -DPQC_ASN1_SANITIZE=ON
+cmake --build build-san
+ctest --test-dir build-san --output-on-failure
+```
+
 ## Platform support
 
 | Platform | Compiler | CI |

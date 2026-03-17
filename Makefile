@@ -42,7 +42,7 @@ concat: $(TU_SRCS) $(INT_HDR)
 	./scripts/concat.sh $(SINGLE_SRC)
 
 $(TEST_BIN): $(TEST_SRC) $(LIB) $(HDR)
-	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(TEST_SRC) -L. -lpqc_asn1
+	$(CC) $(CFLAGS) $(INCLUDES) -o $@ $(TEST_SRC) -L. -lpqc_asn1 $(LDFLAGS)
 
 test: $(TEST_BIN)
 	./$(TEST_BIN)
