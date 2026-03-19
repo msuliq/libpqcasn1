@@ -48,6 +48,12 @@ if(PQC_ASN1_SANITIZE)
   target_link_options(pqc_asn1 PRIVATE -fsanitize=address,undefined)
 endif()
 
+option(PQC_ASN1_COVERAGE "Build with coverage instrumentation" OFF)
+if(PQC_ASN1_COVERAGE)
+  target_compile_options(pqc_asn1 PRIVATE --coverage)
+  target_link_options(pqc_asn1 PRIVATE --coverage)
+endif()
+
 set_target_properties(pqc_asn1 PROPERTIES
   VERSION ${PROJECT_VERSION}
   SOVERSION ${PROJECT_VERSION_MAJOR}
@@ -81,6 +87,10 @@ if(PQC_ASN1_BUILD_TESTS)
   if(PQC_ASN1_SANITIZE)
     target_compile_options(test_pqc_asn1 PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
     target_link_options(test_pqc_asn1 PRIVATE -fsanitize=address,undefined)
+  endif()
+  if(PQC_ASN1_COVERAGE)
+    target_compile_options(test_pqc_asn1 PRIVATE --coverage)
+    target_link_options(test_pqc_asn1 PRIVATE --coverage)
   endif()
   add_test(NAME test_pqc_asn1 COMMAND test_pqc_asn1)
 endif()

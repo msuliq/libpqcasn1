@@ -11,65 +11,36 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
         compiler: [gcc, clang]
+        build_type: [Debug, Release]
         exclude:
           - os: macos-latest
             compiler: gcc
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v6
+          - os: windows-latest
+            compiler: gcc
+        include:
+          - os: windows-latest
+            compiler: msvc
+            build_type: Debug
+          - os: windows-latest
+            compiler: msvc
+            build_type: Release
+    name: Test (${{ matrix.os }}, ${{ matrix.compiler }}, ${{ matrix.build_type }})
+    uses: ./.github/workflows/build.yml
+    with:
+      os: ${{ matrix.os }}
+      compiler: ${{ matrix.compiler }}
+      build_type: ${{ matrix.build_type }}
 
-      - name: Build and test (Make, -Werror)
-        env:
-          CC: ${{ matrix.compiler }}
-          CFLAGS: "-O2 -Wall -Wextra -Wshadow -Wpedantic -Werror -std=c11"
-        run: |
-          make clean
-          make test
-
-      - name: Build and test (CMake)
-        env:
-          CC: ${{ matrix.compiler }}
-        run: |
-          cmake -B build -DCMAKE_C_COMPILER=${{ matrix.compiler }} -DCMAKE_C_FLAGS="-Werror"
-          cmake --build build
-          ctest --test-dir build --output-on-failure
-
-  sanitize:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Build and test with ASan + UBSan (Make)
-        env:
-          CC: clang
-          CFLAGS: "-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -std=c11"
-          LDFLAGS: "-fsanitize=address,undefined"
-        run: |
-          make clean
-          make test
-
-      - name: Build and test with ASan + UBSan (CMake)
-        run: |
-          cmake -B build-san -DCMAKE_C_COMPILER=clang -DPQC_ASN1_SANITIZE=ON
-          cmake --build build-san
-          ctest --test-dir build-san --output-on-failure
-
-  test-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Build and test (CMake + MSVC, /WX)
-        run: |
-          cmake -B build -DCMAKE_C_FLAGS="/WX"
-          cmake --build build --config Release
-          ctest --test-dir build --output-on-failure -C Release
+  coverage:
+    name: Code Coverage
+    uses: ./.github/workflows/build.yml
+    with:
+      os: ubuntu-latest
+      compiler: gcc
+      build_type: Debug
+      enable_coverage: true
 
   fuzz:
     runs-on: ubuntu-latest
@@ -109,7 +80,7 @@ jobs:
       - name: Set up CMake
         uses: jwlawson/actions-setup-cmake@v2
         with:
-          cmake-version: '3.14'
+          cmake-version: 'latest'
 
       - name: Create build directory
         run: mkdir -p build
@@ -121,6 +92,10 @@ jobs:
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DPQC_ASN1_BUILD_TESTS=ON
+
+      - name: Build
+        working-directory: build
+        run: cmake --build .
 
       - name: Run clang-tidy
         working-directory: build
@@ -136,7 +111,17 @@ jobs:
 
   pkg-config:
     name: Package Config Verification
+    uses: ./.github/workflows/build.yml
+    with:
+      os: ubuntu-latest
+      compiler: gcc
+      build_type: Release
+      build_tests: false
+
+  verify-pkg-config:
+    name: Verify pkg-config
     runs-on: ubuntu-latest
+    needs: pkg-config
 
     steps:
       - uses: actions/checkout@v6
@@ -144,7 +129,7 @@ jobs:
       - name: Set up CMake
         uses: jwlawson/actions-setup-cmake@v2
         with:
-          cmake-version: '3.14'
+          cmake-version: 'latest'
 
       - name: Create build directory
         run: mkdir -p build
@@ -154,7 +139,7 @@ jobs:
         run: |
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
-            -DPQC_ASN1_BUILD_TESTS=ON
+            -DPQC_ASN1_BUILD_TESTS=OFF
 
       - name: Build
         working-directory: build

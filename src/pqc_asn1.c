@@ -12,7 +12,7 @@
  *   src/base64.c   — RFC 4648 Base64 encode/decode
  *   src/pem.c      — RFC 7468 PEM encode/decode
  *
- * Version: 0.1.4
+ * Version: 0.1.5
  *
  * Standalone C library — no external dependencies beyond the C standard library.
  *
