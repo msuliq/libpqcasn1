@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-03-19
+
+### Added
+
+#### CI & build infrastructure
+- `static-analysis` CI job: cppcheck and clang-tidy analysis on source translation
+  units (not on generated single-file artifact)
+- `pkg-config` CI job: validates `pqc_asn1.pc` generation and required fields
+  (Name, Version, Description, Libs, Cflags)
+- `security.yml` workflow with four security-focused jobs:
+  - `semgrep`: static security scanning (p/security-audit, p/c, p/memory-safety)
+    with SARIF upload to GitHub Security tab; runs on push/PR/weekly schedule
+  - `code-security`: verifies no stdio.h usage, no unsafe string functions
+    (strcpy/strcat/sprintf), secure-zero function presence, error-handling
+    validation
+  - `dependency-check`: validates stdlib-only includes (no pthread/sys/fcntl),
+    confirms C11 standard requirement
+  - `header-check`: validates header guards, API function count, internal header
+    isolation, C++ compatibility
+- `edge-cases.yml` workflow with five edge-case validation jobs:
+  - `pedantic-compilation`: builds with `-Wall -Wextra -Werror -Wpedantic -Wshadow`
+    via both Make and CMake
+  - `single-file-build`: compiles test directly against `src/pqc_asn1.c`
+    (distribution artifact) to catch sync drift between individual TUs and
+    generated concat artifact
+  - `minimal-config`: validates library-only builds (tests OFF)
+  - `custom-allocator-build`: validates custom allocator macro overrides
+    (`PQC_ASN1_MALLOC`, `PQC_ASN1_FREE`, `PQC_ASN1_REALLOC`)
+  - `concat-reproducibility`: runs `make concat` and verifies no git diff
+    (catches TU edits without regenerating single-file artifact)
+
+---
+
 ## [0.1.3] - 2026-03-17
 
 ### Changed

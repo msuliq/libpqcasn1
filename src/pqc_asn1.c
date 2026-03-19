@@ -12,7 +12,7 @@
  *   src/base64.c   — RFC 4648 Base64 encode/decode
  *   src/pem.c      — RFC 7468 PEM encode/decode
  *
- * Version: 0.1.2
+ * Version: 0.1.4
  *
  * Standalone C library — no external dependencies beyond the C standard library.
  *
@@ -1296,6 +1296,8 @@ static const char *find_at_line_start(const char *hay, size_t hay_len,
     while (search_len > 0) {
         const char *candidate = bounded_find(search, search_len, needle, needle_len);
         if (!candidate) return NULL;
+        /* Safe: when candidate != pem_start, candidate > start of search
+         * range (hay >= pem_start), so candidate[-1] is always in bounds. */
         if (candidate == pem_start || candidate[-1] == '\n' || candidate[-1] == '\r')
             return candidate;
         size_t skip = (size_t)(candidate - search) + 1;
