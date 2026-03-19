@@ -1,0 +1,147 @@
+name: Reusable Build & Test
+
+on:
+  workflow_call:
+    inputs:
+      os:
+        description: 'Operating system'
+        required: true
+        type: string
+      compiler:
+        description: 'Compiler (gcc, clang, msvc)'
+        required: true
+        type: string
+      build_type:
+        description: 'Build type (Debug, Release)'
+        required: true
+        type: string
+      sanitizer:
+        description: 'Sanitizer (address, undefined, or empty)'
+        type: string
+        default: ''
+      enable_coverage:
+        description: 'Enable coverage instrumentation'
+        type: boolean
+        default: false
+      build_tests:
+        description: 'Build test executables'
+        type: boolean
+        default: true
+      cmake_extra_flags:
+        description: 'Extra CMake flags'
+        type: string
+        default: ''
+
+jobs:
+  build:
+    name: Build on ${{ inputs.os }} (${{ inputs.compiler }}${{ inputs.sanitizer != '' && format(', {0}', inputs.sanitizer) || '' }})
+    runs-on: ${{ inputs.os }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up CMake
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: 'latest'
+
+      - name: Set up compiler (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          if [ "${{ inputs.compiler }}" = "gcc" ]; then
+            sudo apt-get update
+            sudo apt-get install -y gcc
+          else
+            sudo apt-get update
+            sudo apt-get install -y clang
+          fi
+
+      - name: Set up compiler (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          if [ "${{ inputs.compiler }}" = "gcc" ]; then
+            brew install gcc
+          fi
+
+      - name: Set up ccache (Linux/macOS)
+        if: runner.os != 'Windows'
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ${{ runner.os }}-${{ inputs.compiler }}-${{ inputs.build_type }}
+          max-size: 500M
+
+      - name: Set up sccache (Windows)
+        if: runner.os == 'Windows'
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          variant: sccache
+          key: ${{ runner.os }}-${{ inputs.compiler }}-${{ inputs.build_type }}
+          max-size: 500M
+
+      - name: Create build directory
+        run: mkdir -p build
+
+      - name: Configure CMake (Unix)
+        if: runner.os != 'Windows'
+        working-directory: build
+        env:
+          CC: ${{ inputs.compiler == 'gcc' && 'gcc' || 'clang' }}
+          CFLAGS: ${{ inputs.sanitizer != '' && format('-fsanitize={0} -fno-omit-frame-pointer -g', inputs.sanitizer) || '' }}
+          LDFLAGS: ${{ inputs.sanitizer != '' && format('-fsanitize={0}', inputs.sanitizer) || '' }}
+        run: |
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=${{ inputs.build_type }} \
+            -DPQC_ASN1_BUILD_TESTS=${{ inputs.build_tests && 'ON' || 'OFF' }} \
+            -DPQC_ASN1_SANITIZE=${{ inputs.sanitizer != '' && 'ON' || 'OFF' }} \
+            -DPQC_ASN1_COVERAGE=${{ inputs.enable_coverage && 'ON' || 'OFF' }} \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            ${{ inputs.cmake_extra_flags }}
+
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        working-directory: build
+        run: |
+          cmake .. `
+            -G "Ninja" `
+            -DCMAKE_BUILD_TYPE=${{ inputs.build_type }} `
+            -DPQC_ASN1_BUILD_TESTS=${{ inputs.build_tests && 'ON' || 'OFF' }} `
+            -DPQC_ASN1_COVERAGE=${{ inputs.enable_coverage && 'ON' || 'OFF' }} `
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache `
+            ${{ inputs.cmake_extra_flags }}
+
+      - name: Build
+        working-directory: build
+        run: cmake --build . --config ${{ inputs.build_type }}
+
+      - name: Run tests
+        if: inputs.build_tests
+        working-directory: build
+        env:
+          ASAN_OPTIONS: ${{ runner.os == 'macOS' && 'halt_on_error=1' || 'detect_leaks=1:halt_on_error=1' }}
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ctest --output-on-failure --parallel 4 --build-config ${{ inputs.build_type }}
+
+      - name: Install gcovr
+        if: inputs.enable_coverage && runner.os != 'Windows'
+        run: pip install gcovr
+
+      - name: Generate coverage report
+        if: inputs.enable_coverage && runner.os != 'Windows'
+        working-directory: build
+        run: |
+          mkdir -p coverage
+          gcovr \
+            --root .. \
+            --filter '../src/' \
+            --exclude-lines-by-pattern '.*TEST\(.*' \
+            --html-details coverage/index.html \
+            --json coverage/coverage.json \
+            --print-summary
+
+      - name: Upload coverage artifact
+        if: inputs.enable_coverage && runner.os != 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-${{ inputs.compiler }}-${{ inputs.build_type }}
+          path: build/coverage/
+          retention-days: 30

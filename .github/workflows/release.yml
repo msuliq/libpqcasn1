@@ -1,47 +1,107 @@
-name: Release
+name: Auto Release on Merge
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
 
 permissions:
   contents: write
+  id-token: write
+  security-events: write
 
 jobs:
-  test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v6
-      - name: Build and test
-        run: make test
-
-  release:
-    needs: test
+  # ============================================================
+  # VERSION DETECTION
+  # ============================================================
+  detect-version:
+    name: Detect version from merge
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.detect.outputs.version }}
+      is-release: ${{ steps.detect.outputs.is-release }}
+
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
-      - name: Extract version from tag
-        id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Verify VERSION file matches tag
+      - name: Detect version from VERSION file
+        id: detect
         run: |
-          file_version=$(cat VERSION | tr -d '[:space:]')
-          tag_version=${{ steps.version.outputs.version }}
-          if [ "$file_version" != "$tag_version" ]; then
-            echo "ERROR: VERSION file ($file_version) does not match tag ($tag_version)"
-            exit 1
+          # Get current version from VERSION file
+          CURRENT_VERSION=$(cat VERSION | tr -d '[:space:]')
+
+          # Cleanup orphaned tags (tags with no published release)
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          for tag in $(git tag -l "v*"); do
+            TAG_HAS_RELEASE=$(gh release view "${tag}" 2>/dev/null && echo "true" || echo "false")
+            if [[ "$TAG_HAS_RELEASE" != "true" ]]; then
+              echo "Deleting orphaned tag: ${tag}"
+              git push origin --delete "${tag}" || true
+            fi
+          done
+
+          # Check if release already exists on GitHub for this version
+          RELEASE_EXISTS=$(gh release view "v$CURRENT_VERSION" 2>/dev/null && echo "true" || echo "false")
+
+          if [[ "$RELEASE_EXISTS" == "true" ]]; then
+            # Release already published for this version
+            echo "is-release=false" >> $GITHUB_OUTPUT
+            echo "Release v$CURRENT_VERSION already published. Skipping."
+          else
+            # No release published yet for this version - proceed
+            echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+            echo "is-release=true" >> $GITHUB_OUTPUT
+            echo "No published release found for v$CURRENT_VERSION. Will create release."
           fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create source tarball
+  # ============================================================
+  # CREATE GIT TAG
+  # ============================================================
+  create-tag:
+    name: Create release tag
+    needs: detect-version
+    if: needs.detect-version.outputs.is-release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - name: Create and push tag
         run: |
-          prefix="libpqcasn1-${{ steps.version.outputs.version }}"
+          VERSION="${{ needs.detect-version.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$VERSION" -m "Release v$VERSION"
+          git push origin "v$VERSION"
+          echo "Created and pushed tag: v$VERSION"
+
+  # ============================================================
+  # BUILD & PACKAGE ARTIFACTS
+  # ============================================================
+  build-and-release:
+    name: Build and release artifacts
+    needs: [detect-version, create-tag]
+    if: needs.detect-version.outputs.is-release == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - name: Create release artifacts
+        run: |
+          prefix="libpqcasn1-${{ needs.detect-version.outputs.version }}"
           mkdir -p dist
 
           # Create tarball with clean source tree
@@ -57,63 +117,117 @@ jobs:
             LICENSE-MIT \
             LICENSE-APACHE
 
-          # Create checksum
-          cd dist
-          sha256sum "${prefix}.tar.gz" > "${prefix}.tar.gz.sha256"
-
-      - name: Generate release notes
-        id: notes
+      - name: Compute checksums
         run: |
-          version=${{ steps.version.outputs.version }}
-          cat > release_notes.md << 'NOTES'
-          ## libpqcasn1 v${{ steps.version.outputs.version }}
+          cd dist
+          sha256sum libpqcasn1-${{ needs.detect-version.outputs.version }}.tar.gz > libpqcasn1-${{ needs.detect-version.outputs.version }}.tar.gz.sha256
+          cat libpqcasn1-${{ needs.detect-version.outputs.version }}.tar.gz.sha256
 
-          Standalone C library for DER/PEM/Base64 encoding/decoding of post-quantum cryptographic keys (SPKI / PKCS#8).
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
 
-          ### Source tarball
+      - name: Sign artifacts
+        env:
+          COSIGN_EXPERIMENTAL: 1
+        run: |
+          cd dist
+          cosign sign-blob --yes \
+            libpqcasn1-${{ needs.detect-version.outputs.version }}.tar.gz \
+            > libpqcasn1-${{ needs.detect-version.outputs.version }}.tar.gz.sig
 
-          The tarball contains everything needed to build and link `libpqcasn1`:
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: dist/libpqcasn1-${{ needs.detect-version.outputs.version }}.tar.gz
+          format: spdx-json
+          output-file: dist/libpqcasn1-${{ needs.detect-version.outputs.version }}.sbom.json
+          upload-artifact: false
 
-          | File | Description |
-          |------|-------------|
-          | `include/pqc_asn1.h` | Public header |
-          | `src/pqc_asn1.c` | Implementation |
-          | `CMakeLists.txt` | CMake build system |
-          | `Makefile` | Simple Makefile alternative |
-          | `VERSION` | Version string |
-          | `LICENSE-MIT` | MIT license |
-          | `LICENSE-APACHE` | Apache 2.0 license |
+      - name: Validate artifacts
+        run: |
+          TEST_DIR=$(mktemp -d)
+          tar -xzf dist/libpqcasn1-${{ needs.detect-version.outputs.version }}.tar.gz -C "$TEST_DIR"
+          test -f "$TEST_DIR/libpqcasn1-${{ needs.detect-version.outputs.version }}/include/pqc_asn1.h" || (echo "Missing pqc_asn1.h"; exit 1)
+          test -f "$TEST_DIR/libpqcasn1-${{ needs.detect-version.outputs.version }}/CMakeLists.txt" || (echo "Missing CMakeLists.txt"; exit 1)
+          echo "✓ Artifact validation passed"
+          rm -rf "$TEST_DIR"
 
-          ### Usage
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist/
+          retention-days: 30
 
-          **Build with CMake:**
-          ```sh
-          tar xzf libpqcasn1-${{ steps.version.outputs.version }}.tar.gz
-          cd libpqcasn1-${{ steps.version.outputs.version }}
-          cmake -B build
-          cmake --build build
-          ```
+  # ============================================================
+  # PUBLISH RELEASE
+  # ============================================================
+  publish-release:
+    name: Publish GitHub Release
+    needs: [detect-version, build-and-release]
+    if: needs.detect-version.outputs.is-release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
-          **Build with Make:**
-          ```sh
-          make
-          ```
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
 
-          **Embed in your project** (Ruby, Python, Rust, etc.):
-          Just copy `include/pqc_asn1.h` and `src/pqc_asn1.c` into your project and compile them alongside your code.
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
 
-          **Custom allocator** (e.g. for Ruby):
-          ```c
-          #define PQC_ASN1_MALLOC ruby_xmalloc
-          #define PQC_ASN1_FREE   ruby_xfree
-          #include "pqc_asn1.h"
-          ```
-          NOTES
+      - name: Extract changelog entry
+        id: changelog
+        run: |
+          VERSION="v${{ needs.detect-version.outputs.version }}"
+          # Extract changelog section for this version
+          CHANGELOG=$(sed -n "/^## \[$VERSION/,/^## \[/p" CHANGELOG.md | head -n -1)
 
-      - name: Create GitHub release
+          if [[ -z "$CHANGELOG" ]]; then
+              CHANGELOG="See commits for details"
+          fi
+
+          # Handle multiline in GitHub Actions
+          CHANGELOG="${CHANGELOG//'%'/'%25'}"
+          CHANGELOG="${CHANGELOG//$'\n'/'%0A'}"
+          CHANGELOG="${CHANGELOG//$'\r'/'%0D'}"
+          echo "body=$CHANGELOG" >> $GITHUB_OUTPUT
+
+      - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
-          body_path: release_notes.md
-          files: |
-            dist/libpqcasn1-${{ steps.version.outputs.version }}.tar.gz
-            dist/libpqcasn1-${{ steps.version.outputs.version }}.tar.gz.sha256
+          files: artifacts/release-artifacts/*
+          body: |
+            ${{ steps.changelog.outputs.body }}
+
+            ## Verify artifact authenticity
+
+            **Verify Cosign signature:**
+            ```sh
+            cosign verify-blob \
+              --bundle=libpqcasn1-v${{ needs.detect-version.outputs.version }}.tar.gz.sig \
+              libpqcasn1-v${{ needs.detect-version.outputs.version }}.tar.gz
+            ```
+
+            **Verify SHA256 checksum:**
+            ```sh
+            sha256sum -c libpqcasn1-v${{ needs.detect-version.outputs.version }}.tar.gz.sha256
+            ```
+
+            **View Software Bill of Materials (SBOM):**
+            See `libpqcasn1-v${{ needs.detect-version.outputs.version }}.sbom.json` for the full SBOM in SPDX JSON format.
+
+            ## Build information
+
+            - Source: [libpqcasn1](https://github.com/${{ github.repository }})
+            - Tag: v${{ needs.detect-version.outputs.version }}
+          tag_name: v${{ needs.detect-version.outputs.version }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

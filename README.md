@@ -378,7 +378,13 @@ make test                        # Make
 ctest --test-dir build           # CMake
 ```
 
-CI builds with **`-Werror`** (both Make and CMake, including MSVC `/WX`), runs a dedicated **sanitize** job (AddressSanitizer + UndefinedBehaviorSanitizer) on Linux and macOS, and runs a **fuzz** job (libFuzzer + ASan + UBSan, 60 s) against the base64 and PEM decoders. To run sanitizers locally:
+### CI & coverage
+
+CI builds with **`-Werror`** (both Make and CMake, including MSVC `/WX`), runs a dedicated **sanitize** job (AddressSanitizer + UndefinedBehaviorSanitizer) on Linux and macOS, and runs a **fuzz** job (libFuzzer + ASan + UBSan, 60 s) against the base64 and PEM decoders.
+
+**Coverage reporting**: CI generates code coverage reports using gcovr with `PQC_ASN1_COVERAGE=ON`. Coverage artifacts (HTML + JSON) are available in GitHub Actions for every build.
+
+To run sanitizers locally:
 
 ```sh
 # Make
@@ -390,6 +396,35 @@ make test CFLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -s
 cmake -B build-san -DPQC_ASN1_SANITIZE=ON
 cmake --build build-san
 ctest --test-dir build-san --output-on-failure
+```
+
+### Releases
+
+Releases are **automatically published** on merge to main. The pipeline:
+1. Detects version from `VERSION` file
+2. Skips publication if release already exists
+3. Creates git tag (`v{VERSION}`)
+4. Builds source tarball with all required files
+5. Signs artifacts with Cosign keyless signatures
+6. Generates SBOM (Software Bill of Materials) in SPDX JSON format
+7. Publishes GitHub release with checksums, signatures, and SBOM
+
+**Verify release artifacts:**
+
+```sh
+# Download cosign (if not installed)
+# https://github.com/sigstore/cosign/releases
+
+# Verify Cosign signature
+cosign verify-blob \
+  --bundle=libpqcasn1-v0.1.5.tar.gz.sig \
+  libpqcasn1-v0.1.5.tar.gz
+
+# Verify SHA256 checksum
+sha256sum -c libpqcasn1-v0.1.5.tar.gz.sha256
+
+# Inspect SBOM
+cat libpqcasn1-v0.1.5.sbom.json | jq .
 ```
 
 ## Platform support
@@ -417,9 +452,14 @@ libpqcasn1/
   CMakeLists.txt              -- CMake build system
   Makefile                    -- simple Make alternative
   pqc_asn1.pc.in              -- pkg-config template
-  VERSION                     -- version string (0.1.2)
+  VERSION                     -- version string (0.1.5)
   LICENSE-MIT                 -- MIT license
   LICENSE-APACHE              -- Apache 2.0 license
+  .github/workflows/build.yml -- reusable parameterized build workflow
+  .github/workflows/ci.yml    -- pull request & main-branch CI
+  .github/workflows/security.yml -- security scanning (Gitleaks, Semgrep)
+  .github/workflows/edge-cases.yml -- edge-case validation jobs
+  .github/workflows/release.yml -- auto-release on merge with signing & SBOM
 ```
 
 ## License

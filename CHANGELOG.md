@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-03-19
+
+### Added
+
+#### CI & build infrastructure improvements
+- Reusable `build.yml` workflow: parameterized, multi-platform build workflow used by all CI jobs to eliminate duplication
+- **Build caching**: ccache (Linux/macOS) and sccache (Windows) for 5-10x faster builds across platforms
+- **Parallel test execution**: all ctest runs now use `--parallel 4` for faster feedback
+- **Code coverage reporting**: new `PQC_ASN1_COVERAGE` CMake option enables gcovr HTML/JSON coverage reports; automated coverage job in CI with artifact uploads
+- **Enhanced secret scanning**: Gitleaks job detects hardcoded secrets/credentials in git history
+- **Expanded security scanning**: Semgrep now includes OWASP Top 10 and CWE Top 25 rule packs (in addition to security-audit and memory-safety)
+- **Modern release pipeline**: auto-release on merge to main (no manual tag workflow)
+  - Version detection from `VERSION` file
+  - Automatic git tag creation on merge
+  - Orphaned tag cleanup
+  - Multi-stage pipeline: version detection → tag creation → build/sign → publish
+- **Artifact signing**: Cosign keyless (OIDC-based) signatures on all release artifacts for supply chain security
+- **SBOM generation**: Software Bill of Materials (SPDX JSON format) generated and attached to all releases for transparency
+- **Changelog integration**: release notes auto-extracted from CHANGELOG.md; publishes with verification instructions
+
+#### Documentation
+- Updated README: added sections on coverage reporting, release pipeline, and verification procedures
+
+### Changed
+
+#### CI workflow refactoring
+- `ci.yml`: simplified from 175 lines to ~155 lines by delegating to reusable `build.yml`
+- `edge-cases.yml`: reduced from 134 lines to 65 lines using reusable workflow for compatible jobs
+- `security.yml`: updated codeql-action from v3 to v4
+
+---
+
 ## [0.1.4] - 2026-03-19
 
 ### Added

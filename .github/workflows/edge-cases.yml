@@ -9,38 +9,22 @@ on:
 jobs:
   pedantic-compilation:
     name: Pedantic compiler flags
-    runs-on: ubuntu-latest
+    uses: ./.github/workflows/build.yml
+    with:
+      os: ubuntu-latest
+      compiler: clang
+      build_type: Release
+      build_tests: true
+      cmake_extra_flags: '-DCMAKE_C_FLAGS="-Wall -Wextra -Werror -Wpedantic -Wshadow"'
 
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Build and test with Make (pedantic flags)
-        env:
-          CC: clang
-          CFLAGS: "-Wall -Wextra -Werror -Wpedantic -std=c11 -Wshadow"
-        run: |
-          make clean
-          make test
-
-      - name: Set up CMake
-        uses: jwlawson/actions-setup-cmake@v2
-        with:
-          cmake-version: '3.14'
-
-      - name: Create build directory
-        run: mkdir -p build
-
-      - name: Build and test with CMake (pedantic flags)
-        working-directory: build
-        env:
-          CC: gcc
-          CFLAGS: "-Wall -Wextra -Werror -Wpedantic -std=c11 -Wshadow"
-        run: |
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DPQC_ASN1_BUILD_TESTS=ON
-          cmake --build .
-          ctest --output-on-failure
+  minimal-config:
+    name: Minimal build configuration
+    uses: ./.github/workflows/build.yml
+    with:
+      os: ubuntu-latest
+      compiler: gcc
+      build_type: Release
+      build_tests: false
 
   single-file-build:
     name: Single-file distribution build
@@ -55,38 +39,6 @@ jobs:
 
       - name: Run single-file build test
         run: ./test_single
-
-  minimal-config:
-    name: Minimal build configuration
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Set up CMake
-        uses: jwlawson/actions-setup-cmake@v2
-        with:
-          cmake-version: '3.14'
-
-      - name: Create build directory
-        run: mkdir -p build
-
-      - name: Configure with minimal options (library only)
-        working-directory: build
-        run: |
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DPQC_ASN1_BUILD_TESTS=OFF
-
-      - name: Build
-        working-directory: build
-        run: cmake --build .
-
-      - name: Verify artifact
-        working-directory: build
-        run: |
-          ls -la libpqc_asn1.a || (echo "ERROR: Library not found"; exit 1)
-          echo "✓ Minimal library build successful"
 
   custom-allocator-build:
     name: Custom allocator compilation
