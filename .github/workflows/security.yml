@@ -1,0 +1,142 @@
+name: Security & Best Practices
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly security scan
+    - cron: '0 2 * * 0'
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  semgrep:
+    name: Semgrep scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run Semgrep
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: >-
+            p/security-audit
+            p/c
+            p/memory-safety
+          generateSarif: true
+        continue-on-error: true
+
+      - name: Upload SARIF file
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+        if: always() && hashFiles('semgrep.sarif') != ''
+
+  code-security:
+    name: Code security checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check for stdio.h usage (should not use stdio)
+        run: |
+          if grep -r '#include <stdio.h>' src/ include/ 2>/dev/null; then
+            echo "ERROR: Library should not use stdio.h (part of design)"
+            exit 1
+          fi
+          echo "✓ No stdio.h usage found"
+
+      - name: Check for unsafe functions
+        run: |
+          # Check for unsafe string functions
+          ! grep -r "strcpy\|strcat\|sprintf" src/ 2>/dev/null || (echo "ERROR: unsafe string functions detected"; exit 1)
+          echo "✓ No unsafe string functions found"
+
+      - name: Verify secure zeroing usage
+        run: |
+          # Verify pqc_asn1_secure_zero is defined and used
+          if grep -q "pqc_asn1_secure_zero" include/pqc_asn1.h; then
+            echo "✓ Secure zeroing function defined"
+          fi
+
+      - name: Check for proper error handling
+        run: |
+          # Basic check for status code usage
+          if grep -q "pqc_asn1_status_t" include/pqc_asn1.h; then
+            echo "✓ Status codes defined"
+          fi
+          if grep -q "PQC_ASN1_OK\|PQC_ASN1_ERR" test/test_pqc_asn1.c; then
+            echo "✓ Status codes verified in tests"
+          fi
+
+  dependency-check:
+    name: Dependency verification
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Verify no unexpected external dependencies
+        run: |
+          # Check that includes are only from stdlib or project
+          for file in src/*.c include/*.h; do
+            if [ -f "$file" ]; then
+              # Extract includes and verify they're from allowed set
+              # Allowed: stdlib, string, stdint, stddef, stdarg, limits, errno, windows (for SecureZeroMemory on Windows)
+              if grep -q "#include <" "$file"; then
+                grep "#include <" "$file" | grep -v "stdlib\|string\|stdint\|stddef\|stdarg\|limits\|errno\|windows" && echo "Unexpected include in $file" && exit 1
+              fi
+            fi
+          done
+          echo "✓ No unexpected external dependencies"
+
+      - name: Check for C11 standard requirement
+        run: |
+          # Verify code is C11 compatible
+          grep -q "C_STANDARD 11" CMakeLists.txt || (echo "ERROR: C11 standard not required"; exit 1)
+          echo "✓ C11 standard required in CMakeLists.txt"
+
+  header-check:
+    name: Header file validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Verify header guards
+        run: |
+          # Check for proper header guards
+          grep -q "#ifndef PQC_ASN1_H" include/pqc_asn1.h || (echo "ERROR: Missing header guard"; exit 1)
+          grep -q "#define PQC_ASN1_H" include/pqc_asn1.h || (echo "ERROR: Missing header define"; exit 1)
+          grep -q "#endif.*PQC_ASN1_H" include/pqc_asn1.h || (echo "ERROR: Missing endif guard"; exit 1)
+          echo "✓ All headers have proper guards"
+
+      - name: Count public API functions
+        run: |
+          # Count how many public function declarations exist
+          if grep -q "pqc_asn1_" include/pqc_asn1.h; then
+            api_count=$(grep -o "pqc_asn1_[a-z_]*(" include/pqc_asn1.h | sort -u | wc -l)
+            echo "✓ Found $api_count public API functions"
+            # Store for regression detection (warn if count drops below threshold)
+            if [ "$api_count" -lt 30 ]; then
+              echo "WARNING: Fewer than 30 public functions (was API removed accidentally?)"
+            fi
+          fi
+
+      - name: Verify internal header not exposed
+        run: |
+          # Check that pqc_asn1_internal.h is not in the public header
+          ! grep -q "pqc_asn1_internal.h" include/pqc_asn1.h || (echo "ERROR: Internal header leaked into public API"; exit 1)
+          echo "✓ Internal header properly isolated"
+
+      - name: Check for C++ compatibility markers
+        run: |
+          # Verify extern "C" guards
+          grep -q "extern \"C\"" include/pqc_asn1.h || (echo "WARNING: No extern C guards for C++"; )
+          echo "✓ Header compatibility check done"

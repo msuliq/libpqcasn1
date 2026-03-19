@@ -1,0 +1,133 @@
+name: Edge Cases
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  pedantic-compilation:
+    name: Pedantic compiler flags
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build and test with Make (pedantic flags)
+        env:
+          CC: clang
+          CFLAGS: "-Wall -Wextra -Werror -Wpedantic -std=c11 -Wshadow"
+        run: |
+          make clean
+          make test
+
+      - name: Set up CMake
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.14'
+
+      - name: Create build directory
+        run: mkdir -p build
+
+      - name: Build and test with CMake (pedantic flags)
+        working-directory: build
+        env:
+          CC: gcc
+          CFLAGS: "-Wall -Wextra -Werror -Wpedantic -std=c11 -Wshadow"
+        run: |
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPQC_ASN1_BUILD_TESTS=ON
+          cmake --build .
+          ctest --output-on-failure
+
+  single-file-build:
+    name: Single-file distribution build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Compile test against single-file artifact
+        run: |
+          cc -O2 -Wall -Werror -std=c11 -Iinclude test/test_pqc_asn1.c src/pqc_asn1.c -o test_single
+
+      - name: Run single-file build test
+        run: ./test_single
+
+  minimal-config:
+    name: Minimal build configuration
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up CMake
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.14'
+
+      - name: Create build directory
+        run: mkdir -p build
+
+      - name: Configure with minimal options (library only)
+        working-directory: build
+        run: |
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPQC_ASN1_BUILD_TESTS=OFF
+
+      - name: Build
+        working-directory: build
+        run: cmake --build .
+
+      - name: Verify artifact
+        working-directory: build
+        run: |
+          ls -la libpqc_asn1.a || (echo "ERROR: Library not found"; exit 1)
+          echo "✓ Minimal library build successful"
+
+  custom-allocator-build:
+    name: Custom allocator compilation
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Create test source with custom allocators
+        run: |
+          cat > test_custom_alloc.c << 'EOF'
+          #define PQC_ASN1_MALLOC malloc
+          #define PQC_ASN1_FREE free
+          #define PQC_ASN1_REALLOC realloc
+          #include "pqc_asn1.h"
+          #include <stdlib.h>
+
+          int main(void) {
+              const char *version = pqc_asn1_version();
+              return (version != NULL) ? 0 : 1;
+          }
+          EOF
+
+      - name: Compile with custom allocator macros
+        run: |
+          cc -O2 -Wall -Werror -std=c11 -Iinclude test_custom_alloc.c src/tlv.c src/builder.c src/parser.c src/base64.c src/pem.c -o test_custom_alloc
+
+      - name: Run custom allocator test
+        run: ./test_custom_alloc
+
+  concat-reproducibility:
+    name: Single-file artifact reproducibility
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Regenerate single-file artifact
+        run: make concat
+
+      - name: Verify no changes to artifact
+        run: |
+          git diff --exit-code src/pqc_asn1.c || (echo "ERROR: src/pqc_asn1.c changed after regeneration"; echo "Run 'make concat' and commit changes"; exit 1)
+          echo "✓ Single-file artifact is in sync with individual translation units"

@@ -31,15 +31,15 @@ target_include_directories(pqc_asn1
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_compile_options(pqc_asn1 PRIVATE
-  $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra -Wshadow -Wpedantic>
+  $<$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>,$<C_COMPILER_ID:AppleClang>>:-Wall -Wextra -Wshadow -Wpedantic>
   $<$<C_COMPILER_ID:MSVC>:/W4>
 )
 target_compile_options(pqc_asn1 PRIVATE
-  $<$<AND:$<CONFIG:Release>,$<C_COMPILER_ID:GNU,Clang,AppleClang>>:-O2>
+  $<$<AND:$<CONFIG:Release>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>,$<C_COMPILER_ID:AppleClang>>>:-O2>
   $<$<AND:$<CONFIG:Release>,$<C_COMPILER_ID:MSVC>>:/O2>
-  $<$<AND:$<CONFIG:RelWithDebInfo>,$<C_COMPILER_ID:GNU,Clang,AppleClang>>:-O2 -g>
+  $<$<AND:$<CONFIG:RelWithDebInfo>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>,$<C_COMPILER_ID:AppleClang>>>:-O2 -g>
   $<$<AND:$<CONFIG:RelWithDebInfo>,$<C_COMPILER_ID:MSVC>>:/O2 /Zi>
-  $<$<AND:$<CONFIG:Debug>,$<C_COMPILER_ID:GNU,Clang,AppleClang>>:-O0 -g>
+  $<$<AND:$<CONFIG:Debug>,$<OR:$<C_COMPILER_ID:GNU>,$<C_COMPILER_ID:Clang>,$<C_COMPILER_ID:AppleClang>>>:-O0 -g>
   $<$<AND:$<CONFIG:Debug>,$<C_COMPILER_ID:MSVC>>:/Od /Zi>
 )
 option(PQC_ASN1_SANITIZE "Build with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
