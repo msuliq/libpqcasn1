@@ -37,9 +37,9 @@ extern "C" {
 
 #define PQC_ASN1_VERSION_MAJOR 0
 #define PQC_ASN1_VERSION_MINOR 1
-#define PQC_ASN1_VERSION_PATCH 3
+#define PQC_ASN1_VERSION_PATCH 6
 
-#define PQC_ASN1_VERSION_STRING "0.1.3"
+#define PQC_ASN1_VERSION_STRING "0.1.6"
 
 /* Runtime version query (returns PQC_ASN1_VERSION_STRING). */
 const char *pqc_asn1_version(void);
@@ -267,6 +267,8 @@ pqc_asn1_status_t pqc_asn1_pkcs8_build_write(
 
 /* Write PKCS#8 DER with optional AlgorithmIdentifier parameters and
  * OneAsymmetricKey publicKey [1] IMPLICIT field.
+ * The OneAsymmetricKey version is selected automatically per RFC 5958 §2:
+ * v2 (INTEGER 1) when pub_len > 0, else v1 (INTEGER 0).
  * params/params_len: AlgorithmIdentifier parameter bytes (NULL/0 if absent).
  * pub_bytes/pub_len: publicKey [1] IMPLICIT content bytes (NULL/0 if absent).
  * buf_len must be >= pqc_asn1_pkcs8_size_ex().
@@ -318,9 +320,12 @@ pqc_asn1_status_t pqc_asn1_pkcs8_build(
 /* Parse SPKI / PKCS#8 DER structures.  Output pointers reference into
  * the input buffer (zero-copy, no allocation).  Parsers enforce:
  *   - No trailing data after the outer SEQUENCE
- *   - No extra fields inside the outer SEQUENCE
+ *   - No unrecognised fields inside the outer SEQUENCE (the OPTIONAL
+ *     PKCS#8 attributes [0] field is accepted but skipped, not exposed)
  *   - BIT STRING unused-bits byte must be 0x00
- *   - PKCS#8 version must be INTEGER 0
+ *   - PKCS#8 version is INTEGER 0 (v1) without publicKey, or INTEGER 1
+ *     (v2) with publicKey [1] present, per RFC 5958 §2; a mismatch between
+ *     the version value and publicKey presence returns PQC_ASN1_ERR_VERSION
  *
  * flags: bitwise OR of PQC_PARSE_* constants, or 0 for defaults.
  *   PQC_PARSE_STRICT_ALG_ID — reject AlgorithmIdentifier parameters.
