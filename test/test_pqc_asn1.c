@@ -69,7 +69,7 @@ static void test_version(void)
     CHECK(strcmp(v, PQC_ASN1_VERSION_STRING) == 0);
     CHECK(PQC_ASN1_VERSION_MAJOR == 0);
     CHECK(PQC_ASN1_VERSION_MINOR == 1);
-    CHECK(PQC_ASN1_VERSION_PATCH == 3);
+    CHECK(PQC_ASN1_VERSION_PATCH == 6);
 }
 
 /* ------------------------------------------------------------------ */
@@ -844,6 +844,189 @@ static void test_pkcs8_allocating(void)
 
     pqc_asn1_secure_zero(der, total);
     PQC_ASN1_FREE(der);
+}
+
+/* RFC 5958 §2: when the OneAsymmetricKey publicKey [1] field is present the
+ * version must be v2 (INTEGER 1).  This round-trips build_write_ex(pub) through
+ * the parser, which also enforces the version-vs-publicKey rule. */
+static void test_pkcs8_publickey_roundtrip(void)
+{
+    uint8_t sk[64];
+    uint8_t pk[32];
+    memset(sk, 0x55, sizeof(sk));
+    memset(pk, 0xAB, sizeof(pk));
+
+    size_t der_size;
+    CHECK_RC_BAIL(pqc_asn1_pkcs8_size_ex(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
+                                                  NULL, 0, sizeof(sk), sizeof(pk), &der_size));
+    CHECK_BAIL(der_size > 0);
+
+    uint8_t *der = (uint8_t *)malloc(der_size);
+    CHECK_BAIL(der != NULL);
+    size_t written;
+    CHECK_RC_BAIL(pqc_asn1_pkcs8_build_write_ex(der, der_size,
+                                                         ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
+                                                         NULL, 0,
+                                                         sk, sizeof(sk),
+                                                         pk, sizeof(pk),
+                                                         &written));
+    CHECK(written == der_size);
+
+    /* The version TLV (02 01 vv) is the first element inside the outer
+     * SEQUENCE, so the first 02 01 00/01 in the stream is the version; with
+     * publicKey present it must be v2 (01). */
+    size_t i;
+    int found_version = 0;
+    for (i = 0; i + 2 < written; i++) {
+        if (der[i] == 0x02 && der[i+1] == 0x01 &&
+            (der[i+2] == 0x00 || der[i+2] == 0x01)) {
+            CHECK(der[i+2] == 0x01);  /* v2 because publicKey is present */
+            found_version = 1;
+            break;
+        }
+    }
+    CHECK(found_version);
+
+    const uint8_t *out_oid, *out_sk, *out_pub;
+    size_t out_oid_len, out_sk_len, out_pub_len;
+    CHECK_RC(pqc_asn1_pkcs8_parse(der, written,
+                                           &out_oid, &out_oid_len,
+                                           NULL, NULL,
+                                           &out_sk, &out_sk_len,
+                                           &out_pub, &out_pub_len,
+                                           0));
+    CHECK(out_oid_len == sizeof(ML_DSA_65_OID));
+    CHECK(memcmp(out_oid, ML_DSA_65_OID, sizeof(ML_DSA_65_OID)) == 0);
+    CHECK(out_sk_len == sizeof(sk));
+    CHECK(memcmp(out_sk, sk, sizeof(sk)) == 0);
+    CHECK(out_pub_len == sizeof(pk));
+    CHECK(out_pub != NULL && memcmp(out_pub, pk, sizeof(pk)) == 0);
+
+    pqc_asn1_secure_zero(der, der_size);
+    free(der);
+}
+
+/* RFC 5958 §2 consistency: v2 (version 1) without a publicKey, and v1
+ * (version 0) with a publicKey, are both rejected as PQC_ASN1_ERR_VERSION. */
+static void test_pkcs8_version_publickey_mismatch(void)
+{
+    uint8_t sk[32];
+    uint8_t pk[16];
+    memset(sk, 0x22, sizeof(sk));
+    memset(pk, 0xCD, sizeof(pk));
+
+    const uint8_t *o, *s, *pb;
+    size_t ol, sl, pl;
+
+    /* Case 1: v1 (version 0) carrying a publicKey — build with pub, then
+     * force the version byte back to 0.  Parser must reject. */
+    size_t sz1;
+    CHECK_RC_BAIL(pqc_asn1_pkcs8_size_ex(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
+                                                  NULL, 0, sizeof(sk), sizeof(pk), &sz1));
+    uint8_t *d1 = (uint8_t *)malloc(sz1);
+    CHECK_BAIL(d1 != NULL);
+    size_t w1;
+    CHECK_RC_BAIL(pqc_asn1_pkcs8_build_write_ex(d1, sz1,
+                                                         ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
+                                                         NULL, 0, sk, sizeof(sk),
+                                                         pk, sizeof(pk), &w1));
+    size_t i;
+    for (i = 0; i + 2 < w1; i++) {
+        if (d1[i] == 0x02 && d1[i+1] == 0x01 && d1[i+2] == 0x01) { d1[i+2] = 0x00; break; }
+    }
+    CHECK(pqc_asn1_pkcs8_parse(d1, w1, &o, &ol, NULL, NULL, &s, &sl,
+                                        &pb, &pl, 0) == PQC_ASN1_ERR_VERSION);
+    pqc_asn1_secure_zero(d1, sz1);
+    free(d1);
+
+    /* Case 2: v2 (version 1) without a publicKey — build without pub, then
+     * force the version byte to 1.  Parser must reject. */
+    uint8_t *d2 = NULL;
+    size_t t2;
+    CHECK_RC_BAIL(pqc_asn1_pkcs8_build(ML_DSA_65_OID, sizeof(ML_DSA_65_OID),
+                                                sk, sizeof(sk), &d2, &t2));
+    for (i = 0; i + 2 < t2; i++) {
+        if (d2[i] == 0x02 && d2[i+1] == 0x01 && d2[i+2] == 0x00) { d2[i+2] = 0x01; break; }
+    }
+    CHECK(pqc_asn1_pkcs8_parse(d2, t2, &o, &ol, NULL, NULL, &s, &sl,
+                                        &pb, &pl, 0) == PQC_ASN1_ERR_VERSION);
+    pqc_asn1_secure_zero(d2, t2);
+    PQC_ASN1_FREE(d2);
+}
+
+/* RFC 5958 §2: the OPTIONAL attributes [0] field (tag 0xA0) may appear after
+ * privateKey.  The library does not model attributes, but the parser must
+ * accept and skip it rather than reject the whole structure. */
+static void test_pkcs8_attributes_accepted(void)
+{
+    uint8_t sk[8];
+    uint8_t attrs_inner[] = { 0x05, 0x00 };  /* opaque placeholder content */
+    memset(sk, 0x33, sizeof(sk));
+
+    /* Hand-build a v1 OneAsymmetricKey with attributes [0] and no publicKey:
+     *   SEQUENCE { INTEGER 0, SEQUENCE{OID}, OCTET STRING{sk}, [0]{attrs} } */
+    uint8_t body[128];
+    size_t p = 0;
+    body[p++] = 0x02; body[p++] = 0x01; body[p++] = 0x00;             /* version 0 */
+    body[p++] = 0x30; body[p++] = (uint8_t)sizeof(ML_DSA_65_OID);     /* alg SEQUENCE */
+    memcpy(body + p, ML_DSA_65_OID, sizeof(ML_DSA_65_OID)); p += sizeof(ML_DSA_65_OID);
+    body[p++] = 0x04; body[p++] = (uint8_t)sizeof(sk);                /* privateKey */
+    memcpy(body + p, sk, sizeof(sk)); p += sizeof(sk);
+    body[p++] = 0xA0; body[p++] = (uint8_t)sizeof(attrs_inner);       /* attributes [0] */
+    memcpy(body + p, attrs_inner, sizeof(attrs_inner)); p += sizeof(attrs_inner);
+
+    uint8_t der[130];
+    size_t d = 0;
+    der[d++] = 0x30; der[d++] = (uint8_t)p;   /* p < 128 → short-form length */
+    memcpy(der + d, body, p); d += p;
+
+    const uint8_t *out_oid, *out_sk, *out_pub;
+    size_t out_oid_len, out_sk_len, out_pub_len;
+    CHECK_RC(pqc_asn1_pkcs8_parse(der, d, &out_oid, &out_oid_len,
+                                           NULL, NULL, &out_sk, &out_sk_len,
+                                           &out_pub, &out_pub_len, 0));
+    CHECK(out_sk_len == sizeof(sk));
+    CHECK(memcmp(out_sk, sk, sizeof(sk)) == 0);
+    CHECK(out_pub == NULL);          /* no publicKey present */
+    CHECK(out_pub_len == 0);
+}
+
+/* attributes [0] followed by publicKey [1] (RFC 5958 field order) on a v2 key
+ * must parse, skipping attributes and returning the publicKey. */
+static void test_pkcs8_attributes_and_publickey(void)
+{
+    uint8_t sk[8];
+    uint8_t pk[6];
+    uint8_t attrs_inner[] = { 0x05, 0x00 };
+    memset(sk, 0x44, sizeof(sk));
+    memset(pk, 0x55, sizeof(pk));
+
+    uint8_t body[128];
+    size_t p = 0;
+    body[p++] = 0x02; body[p++] = 0x01; body[p++] = 0x01;             /* version 1 (v2) */
+    body[p++] = 0x30; body[p++] = (uint8_t)sizeof(ML_DSA_65_OID);
+    memcpy(body + p, ML_DSA_65_OID, sizeof(ML_DSA_65_OID)); p += sizeof(ML_DSA_65_OID);
+    body[p++] = 0x04; body[p++] = (uint8_t)sizeof(sk);
+    memcpy(body + p, sk, sizeof(sk)); p += sizeof(sk);
+    body[p++] = 0xA0; body[p++] = (uint8_t)sizeof(attrs_inner);       /* attributes [0] */
+    memcpy(body + p, attrs_inner, sizeof(attrs_inner)); p += sizeof(attrs_inner);
+    body[p++] = 0x81; body[p++] = (uint8_t)sizeof(pk);               /* publicKey [1] */
+    memcpy(body + p, pk, sizeof(pk)); p += sizeof(pk);
+
+    uint8_t der[130];
+    size_t d = 0;
+    der[d++] = 0x30; der[d++] = (uint8_t)p;
+    memcpy(der + d, body, p); d += p;
+
+    const uint8_t *out_oid, *out_sk, *out_pub;
+    size_t out_oid_len, out_sk_len, out_pub_len;
+    CHECK_RC(pqc_asn1_pkcs8_parse(der, d, &out_oid, &out_oid_len,
+                                           NULL, NULL, &out_sk, &out_sk_len,
+                                           &out_pub, &out_pub_len, 0));
+    CHECK(out_sk_len == sizeof(sk));
+    CHECK(memcmp(out_sk, sk, sizeof(sk)) == 0);
+    CHECK(out_pub_len == sizeof(pk));
+    CHECK(out_pub != NULL && memcmp(out_pub, pk, sizeof(pk)) == 0);
 }
 
 static void test_pkcs8_write_buffer_too_small(void)
@@ -1721,6 +1904,10 @@ int main(void)
     printf("\nPKCS#8:\n");
     RUN_TEST(test_pkcs8_roundtrip);
     RUN_TEST(test_pkcs8_allocating);
+    RUN_TEST(test_pkcs8_publickey_roundtrip);
+    RUN_TEST(test_pkcs8_version_publickey_mismatch);
+    RUN_TEST(test_pkcs8_attributes_accepted);
+    RUN_TEST(test_pkcs8_attributes_and_publickey);
     RUN_TEST(test_pkcs8_write_buffer_too_small);
     RUN_TEST(test_parse_pkcs8_bad_version);
 

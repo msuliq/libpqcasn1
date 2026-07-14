@@ -12,7 +12,7 @@
  *   src/base64.c   — RFC 4648 Base64 encode/decode
  *   src/pem.c      — RFC 7468 PEM encode/decode
  *
- * Version: 0.1.5
+ * Version: 0.1.6
  *
  * Standalone C library — no external dependencies beyond the C standard library.
  *
@@ -295,7 +295,7 @@ const char *pqc_asn1_error_message(pqc_asn1_status_t code)
     switch (code) {
     case PQC_ASN1_OK:                   return "success";
     case PQC_ASN1_ERR_OUTER_SEQUENCE:   return "invalid or missing outer SEQUENCE";
-    case PQC_ASN1_ERR_VERSION:          return "invalid or missing version (expected INTEGER 0)";
+    case PQC_ASN1_ERR_VERSION:          return "invalid PKCS#8 version (RFC 5958: v1/0 without publicKey, v2/1 with publicKey)";
     case PQC_ASN1_ERR_ALGORITHM:        return "invalid or missing AlgorithmIdentifier";
     case PQC_ASN1_ERR_KEY:              return "invalid or missing key element";
     case PQC_ASN1_ERR_UNUSED_BITS:      return "BIT STRING has non-zero unused-bits byte";
@@ -415,14 +415,17 @@ static pqc_asn1_status_t spki_compute_layout(spki_layout_t *l,
 /* Internal: PKCS#8 layout (shared between _size and _write)           */
 /* ------------------------------------------------------------------ */
 
-/* Version field for PKCS#8 OneAsymmetricKey — always INTEGER 0 (v1).
- * Stored as a pre-encoded DER TLV to avoid runtime encoding. */
-static const uint8_t PKCS8_VERSION_TLV[] = {0x02, 0x01, 0x00};
+/* Version field for PKCS#8 OneAsymmetricKey (RFC 5958 §2): v1 (INTEGER 0)
+ * when the publicKey [1] field is absent, v2 (INTEGER 1) when it is present.
+ * Stored as pre-encoded DER TLVs to avoid runtime encoding.  Both encode to
+ * the same 3-byte length, so the layout size is independent of the choice. */
+static const uint8_t PKCS8_VERSION_V1_TLV[] = {0x02, 0x01, 0x00};
+static const uint8_t PKCS8_VERSION_V2_TLV[] = {0x02, 0x01, 0x01};
 
 /* Pre-computed DER sizes for PKCS#8 OneAsymmetricKey.
  *
  *   SEQUENCE (total) {
- *     INTEGER 0 (version)
+ *     INTEGER version (v1=0, or v2=1 when publicKey present)
  *     SEQUENCE (alg_total) { OID [params] (alg_inner) }
  *     OCTET STRING (os_total) { sk_bytes (os_inner) }
  *     [1] IMPLICIT (pub_total) { pub_bytes }   -- optional publicKey field
@@ -459,8 +462,9 @@ static pqc_asn1_status_t pkcs8_compute_layout_ex(pkcs8_layout_t *l,
         l->pub_total = 0;
     }
 
+    /* v1 and v2 version TLVs are the same length, so either sizeof works. */
     l->seq_inner = safe_add(
-        safe_add(safe_add(sizeof(PKCS8_VERSION_TLV), l->alg_total), l->os_total),
+        safe_add(safe_add(sizeof(PKCS8_VERSION_V1_TLV), l->alg_total), l->os_total),
         l->pub_total);
     if (l->seq_inner == PQC_SIZE_OVERFLOW) return PQC_ASN1_ERR_OVERFLOW;
 
@@ -638,9 +642,12 @@ pqc_asn1_status_t pqc_asn1_pkcs8_build_write_ex(
     rc = der_write_length_safe(&p, l.seq_inner);
     if (rc != PQC_ASN1_OK) { pqc_asn1_secure_zero(buf, buf_len); return rc; }
 
-    /* INTEGER 0 (version) */
-    memcpy(p, PKCS8_VERSION_TLV, sizeof(PKCS8_VERSION_TLV));
-    p += sizeof(PKCS8_VERSION_TLV);
+    /* INTEGER version — v2 (1) when the OneAsymmetricKey publicKey [1] field
+     * is present, else v1 (0), per RFC 5958 §2. */
+    const uint8_t *version_tlv = (pub_len > 0) ? PKCS8_VERSION_V2_TLV
+                                               : PKCS8_VERSION_V1_TLV;
+    memcpy(p, version_tlv, sizeof(PKCS8_VERSION_V1_TLV));
+    p += sizeof(PKCS8_VERSION_V1_TLV);
 
     /* AlgorithmIdentifier SEQUENCE { OID [params] } */
     *p++ = 0x30;
@@ -848,14 +855,16 @@ pqc_asn1_status_t pqc_asn1_pkcs8_parse(
 
     size_t inner_pos = 0;
 
-    /* INTEGER (version — must be 0) */
+    /* INTEGER version — v1(0) or v2(1) per RFC 5958 §2.  The value is
+     * cross-checked against publicKey presence below. */
     const uint8_t *int_content;
     size_t int_len;
     if (pqc_asn1_der_read_tlv(seq_content, seq_len, &inner_pos, 0x02,
                                 &int_content, &int_len) != PQC_ASN1_OK)
         return PQC_ASN1_ERR_VERSION;
-    if (int_len != 1 || int_content[0] != 0x00)
+    if (int_len != 1 || (int_content[0] != 0x00 && int_content[0] != 0x01))
         return PQC_ASN1_ERR_VERSION;
+    uint8_t version = int_content[0];
 
     /* AlgorithmIdentifier SEQUENCE { OID [params] } */
     pqc_asn1_status_t alg_rc = parse_algorithm_identifier(
@@ -873,28 +882,47 @@ pqc_asn1_status_t pqc_asn1_pkcs8_parse(
     *sk_bytes = os_content;
     *sk_len = os_len;
 
-    /* Optional publicKey [1] IMPLICIT BIT STRING (RFC 9629 / RFC 5958 §3).
+    /* Optional attributes [0] IMPLICIT SET OF Attribute (RFC 5958 §2).
+     * Tag 0xA0 = CONTEXT-SPECIFIC[0] CONSTRUCTED.  Appears (if present)
+     * after privateKey and before publicKey.  The library does not model
+     * attributes, so a well-formed field is accepted and skipped rather
+     * than exposed; a structurally-malformed one is a DER parse error. */
+    if (inner_pos < seq_len && seq_content[inner_pos] == 0xA0) {
+        const uint8_t *attr_content;
+        size_t attr_len;
+        if (pqc_asn1_der_read_tlv(seq_content, seq_len, &inner_pos, 0xA0,
+                                   &attr_content, &attr_len) != PQC_ASN1_OK)
+            return PQC_ASN1_ERR_DER_PARSE;
+    }
+
+    /* Optional publicKey [1] IMPLICIT BIT STRING (RFC 9629 / RFC 5958 §2).
      * Tag 0x81 = CONTEXT-SPECIFIC[1] PRIMITIVE.  Only accepted if no other
      * unrecognised fields follow; silently skip if caller passes NULL. */
     if (pub_key) *pub_key = NULL;
     if (pub_key_len) *pub_key_len = 0;
 
-    if (inner_pos < seq_len) {
+    int have_pub = 0;
+    if (inner_pos < seq_len && seq_content[inner_pos] == 0x81) {
         /* Accept [1] IMPLICIT BIT STRING — store if caller wants it. */
-        if (seq_content[inner_pos] == 0x81) {
-            const uint8_t *pk_content;
-            size_t pk_len_val;
-            if (pqc_asn1_der_read_tlv(seq_content, seq_len, &inner_pos, 0x81,
-                                       &pk_content, &pk_len_val) != PQC_ASN1_OK)
-                return PQC_ASN1_ERR_KEY;
-            if (pub_key) *pub_key = pk_content;
-            if (pub_key_len) *pub_key_len = pk_len_val;
-        }
+        const uint8_t *pk_content;
+        size_t pk_len_val;
+        if (pqc_asn1_der_read_tlv(seq_content, seq_len, &inner_pos, 0x81,
+                                   &pk_content, &pk_len_val) != PQC_ASN1_OK)
+            return PQC_ASN1_ERR_KEY;
+        have_pub = 1;
+        if (pub_key) *pub_key = pk_content;
+        if (pub_key_len) *pub_key_len = pk_len_val;
     }
 
-    /* Reject any remaining unrecognised fields. */
+    /* Reject any remaining unrecognised fields (including a publicKey [1]
+     * or attributes [0] that appears out of RFC 5958 order). */
     if (inner_pos != seq_len)
         return PQC_ASN1_ERR_EXTRA_FIELDS;
+
+    /* RFC 5958 §2: version is v2 (1) if and only if publicKey is present,
+     * otherwise v1 (0).  Reject the mismatched combinations. */
+    if ((version == 0x01) != (have_pub != 0))
+        return PQC_ASN1_ERR_VERSION;
 
     return PQC_ASN1_OK;
 }

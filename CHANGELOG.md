@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2026-07-15
+
+### Fixed
+
+#### RFC 5958 PKCS#8 OneAsymmetricKey version
+- `pqc_asn1_pkcs8_build_write_ex` now emits version **v2 (INTEGER 1)** when the
+  optional `publicKey [1]` field is present, and **v1 (INTEGER 0)** when it is
+  absent, per RFC 5958 §2. Previously the version was hardcoded to v1 even with a
+  `publicKey` present, producing non-conformant DER that strict decoders (e.g.
+  OpenSSL `d2i_PKCS8`) reject. The version TLV is the same length in both cases, so
+  the computed structure size is unchanged
+- `pqc_asn1_pkcs8_parse` now accepts version v1 **or** v2 and enforces the RFC 5958
+  §2 rule that v2 appears if and only if `publicKey` is present; mismatched
+  combinations return `PQC_ASN1_ERR_VERSION`. Previously only v1 was accepted, so
+  conformant v2 keys — including the library's own `publicKey`-bearing output —
+  could not be parsed
+- Updated the `PQC_ASN1_ERR_VERSION` message and the public-header parse contract,
+  which previously stated the version must be INTEGER 0
+- Synced the C API version constants (`PQC_ASN1_VERSION_*` / `PQC_ASN1_VERSION_STRING`
+  in `include/pqc_asn1.h`) with the `VERSION` file; these had drifted — the header
+  reported 0.1.3 while `VERSION` was 0.1.5
+
+### Added
+
+- `pqc_asn1_pkcs8_parse` now accepts the OPTIONAL RFC 5958 `attributes [0]` field
+  (tag `0xA0`) between `privateKey` and `publicKey`. A well-formed field is skipped
+  (not exposed) instead of being rejected as `PQC_ASN1_ERR_EXTRA_FIELDS`; a
+  structurally malformed one returns `PQC_ASN1_ERR_DER_PARSE`. Out-of-order fields
+  are still rejected
+- Tests: PKCS#8 `publicKey` round-trip (asserts the v2 version byte), version /
+  `publicKey` mismatch rejection in both directions, and `attributes [0]`
+  acceptance with and without a `publicKey`
+
+### Changed
+
+- **Behavioral (wire format):** PKCS#8 DER emitted by earlier releases' `_ex`
+  builder with a `publicKey` carried version v1 (non-conformant). The new parser
+  rejects that v1 + `publicKey` combination as `PQC_ASN1_ERR_VERSION`. Re-export
+  affected keys with this release to produce conformant v2 DER
+
+---
+
 ## [0.1.5] - 2026-03-19
 
 ### Added

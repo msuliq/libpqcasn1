@@ -199,7 +199,7 @@ const char *pqc_asn1_error_message(pqc_asn1_status_t code)
     switch (code) {
     case PQC_ASN1_OK:                   return "success";
     case PQC_ASN1_ERR_OUTER_SEQUENCE:   return "invalid or missing outer SEQUENCE";
-    case PQC_ASN1_ERR_VERSION:          return "invalid or missing version (expected INTEGER 0)";
+    case PQC_ASN1_ERR_VERSION:          return "invalid PKCS#8 version (RFC 5958: v1/0 without publicKey, v2/1 with publicKey)";
     case PQC_ASN1_ERR_ALGORITHM:        return "invalid or missing AlgorithmIdentifier";
     case PQC_ASN1_ERR_KEY:              return "invalid or missing key element";
     case PQC_ASN1_ERR_UNUSED_BITS:      return "BIT STRING has non-zero unused-bits byte";

@@ -8,7 +8,7 @@ Post-quantum cryptography (PQC) schemes like **ML-DSA**, **ML-KEM**, and **SLH-D
 
 1. **Post-quantum independence** -- ML-DSA is designed to survive a future where classical crypto is broken. Coupling key serialization to OpenSSL at link time defeats the purpose.
 2. **Portability** -- A self-contained codec with zero external dependencies is trivial to embed in Ruby, Python, Rust, Go, or any other language binding.
-3. **Simplicity** -- PQC keys only use SEQUENCE, OID, BIT STRING, OCTET STRING, and INTEGER 0. The required ASN.1 subset fits comfortably in a single C file.
+3. **Simplicity** -- PQC keys only use SEQUENCE, OID, BIT STRING, OCTET STRING, and a small INTEGER version. The required ASN.1 subset fits comfortably in a single C file.
 4. **Secure zeroing** -- Secret key intermediates are zeroed in the same compilation unit, making the wipe path easy to audit without depending on another library's internal buffer management.
 
 libpqcasn1 provides exactly this: a minimal, auditable, dependency-free codec for the DER/PEM subset that PQC key serialization requires.
@@ -22,7 +22,7 @@ libpqcasn1 provides exactly this: a minimal, auditable, dependency-free codec fo
 - **Configurable allocator** -- override `PQC_ASN1_MALLOC`/`PQC_ASN1_FREE` for custom memory management (e.g. Ruby's `ruby_xmalloc`/`ruby_xfree`)
 - **Secure memory handling** -- secret key buffers are securely zeroed on error and deallocation using platform-optimized primitives
 - **Flexible AlgorithmIdentifier handling** -- parsers capture optional parameters by default; `PQC_PARSE_STRICT_ALG_ID` flag rejects them for strict RFC 9629 compliance; `_ex` builder variants accept optional parameter blobs for non-RFC-9629 algorithms
-- **Optional PKCS#8 publicKey field** -- RFC 5958 `publicKey [1] IMPLICIT` field supported in both builder and parser
+- **Optional PKCS#8 publicKey field** -- RFC 5958 `publicKey [1] IMPLICIT` field supported in both builder and parser, with automatic v1/v2 version selection per RFC 5958 §2; the parser also accepts and skips the optional `attributes [0]` field
 - **Strict validation** -- DER canonical form enforcement, RFC 7468 PEM boundary rules, RFC 4648 base64 padding strictness
 - **Overflow-safe arithmetic** -- all size computations use checked addition to prevent integer overflow
 - **Comprehensive error codes** -- 19 distinct status codes for precise error diagnosis
@@ -216,7 +216,7 @@ All functions return `pqc_asn1_status_t`. `PQC_ASN1_OK` (0) indicates success; a
 |------|-------|-------------|
 | `PQC_ASN1_OK` | 0 | Success |
 | `PQC_ASN1_ERR_OUTER_SEQUENCE` | -1 | Invalid/missing outer SEQUENCE |
-| `PQC_ASN1_ERR_VERSION` | -2 | Invalid/missing version INTEGER |
+| `PQC_ASN1_ERR_VERSION` | -2 | Invalid PKCS#8 version, or version/publicKey mismatch (RFC 5958 §2) |
 | `PQC_ASN1_ERR_ALGORITHM` | -3 | Invalid/missing AlgorithmIdentifier |
 | `PQC_ASN1_ERR_KEY` | -4 | Invalid/missing key element |
 | `PQC_ASN1_ERR_UNUSED_BITS` | -5 | BIT STRING has non-zero unused bits |
@@ -309,12 +309,14 @@ SEQUENCE {
 
 ```
 SEQUENCE {
-  INTEGER 0                          -- version (v1)
+  INTEGER 0|1                        -- version: v1 (0) without publicKey, v2 (1) with it (RFC 5958 §2)
   SEQUENCE { OID [params] }          -- AlgorithmIdentifier
   OCTET STRING { sk }                -- private key bytes
   [1] IMPLICIT BIT STRING { pub }    -- optional publicKey (RFC 5958 / RFC 9629)
 }
 ```
+
+The builder selects the version automatically: **v2 (INTEGER 1)** when the `publicKey [1]` field is present, otherwise **v1 (INTEGER 0)**. The parser accepts either version and enforces the RFC 5958 §2 rule that v2 appears if and only if `publicKey` is present (a mismatch returns `PQC_ASN1_ERR_VERSION`). The parser also accepts, and skips, the OPTIONAL `attributes [0]` field between `privateKey` and `publicKey`; the builder does not emit it.
 
 ### Design principles
 
@@ -417,14 +419,14 @@ Releases are **automatically published** on merge to main. The pipeline:
 
 # Verify Cosign signature
 cosign verify-blob \
-  --bundle=libpqcasn1-v0.1.5.tar.gz.sig \
-  libpqcasn1-v0.1.5.tar.gz
+  --bundle=libpqcasn1-v0.1.6.tar.gz.sig \
+  libpqcasn1-v0.1.6.tar.gz
 
 # Verify SHA256 checksum
-sha256sum -c libpqcasn1-v0.1.5.tar.gz.sha256
+sha256sum -c libpqcasn1-v0.1.6.tar.gz.sha256
 
 # Inspect SBOM
-cat libpqcasn1-v0.1.5.sbom.json | jq .
+cat libpqcasn1-v0.1.6.sbom.json | jq .
 ```
 
 ## Platform support
@@ -452,7 +454,7 @@ libpqcasn1/
   CMakeLists.txt              -- CMake build system
   Makefile                    -- simple Make alternative
   pqc_asn1.pc.in              -- pkg-config template
-  VERSION                     -- version string (0.1.5)
+  VERSION                     -- version string (0.1.6)
   LICENSE-MIT                 -- MIT license
   LICENSE-APACHE              -- Apache 2.0 license
   .github/workflows/build.yml -- reusable parameterized build workflow
